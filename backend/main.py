@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,7 +16,32 @@ from backend.database import engine, Base, get_db
 # Isso garante que o sistema ache as pastas static e templates na raiz
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-app = FastAPI(title="Ryzer Marketplace")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Garante que o banco tenha as tabelas certas (e dados de demonstração)
+    toda vez que a aplicação sobe, sem depender de nenhum passo manual
+    (ex.: rodar um script via shell no servidor). Isso é essencial em
+    produção: a primeira vez que o serviço sobe contra um banco novo
+    (como um Postgres recém-criado), as tabelas ainda não existem.
+
+    Tudo aqui é seguro de rodar repetidas vezes: 'create_all' não recria
+    tabelas que já existem, e 'criar_usuario_inicial' já confere se o
+    admin/vendedor demo existem antes de inserir.
+    """
+    from backend.criar_usuario import criar_usuario_inicial
+    try:
+        criar_usuario_inicial()
+    except Exception as e:
+        # Não deixamos uma falha aqui derrubar a aplicação inteira — só
+        # registramos no log pra investigar. Sem isso, um erro transitório
+        # de conexão no boot tiraria o site do ar por completo.
+        print(f"⚠️  Falha ao preparar o banco de dados no startup: {e}")
+    yield
+
+
+app = FastAPI(title="Ryzer Marketplace", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
