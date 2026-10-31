@@ -14,6 +14,7 @@ class StatusProjeto(enum.Enum):
     que o banco não aceite qualquer texto e que o fluxo de segurança seja seguido.
     """
     ABERTO = "aberto"              # O anúncio está na vitrine, esperando interessado.
+    AGUARDANDO_PAGAMENTO = "aguardando_pagamento"  # Pix gerado, esperando confirmação do pagamento.
     PAGAMENTO_RETIDO = "pagamento_retido"  # O comprador pagou, mas o dinheiro está travado comigo (Ryzer).
     FINALIZADO = "finalizado"      # O código bateu, o vendedor recebeu e o conteúdo foi entregue.
     CANCELADO = "cancelado"        # Deu algum problema e a transação foi desfeita.
@@ -57,7 +58,8 @@ class Projeto(Base):
     id = Column(Integer, primary_key=True, index=True)
     titulo = Column(String, index=True, nullable=False)
     valor = Column(Float, nullable=False)
-    
+    categoria = Column(String, nullable=False, default="geral")
+
     # CHAVES ESTRANGEIRAS: Ligam o projeto aos donos dele
     # cliente_id começa vazio (null) porque no início só temos o vendedor.
     cliente_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
@@ -75,7 +77,13 @@ class Projeto(Base):
     conteudo_digital = Column(String, nullable=True) 
     
     # codigo_verificacao: O segredo de 6 dígitos que gera a confiança entre as partes.
-    codigo_verificacao = Column(String(6), nullable=True) 
+    codigo_verificacao = Column(String(6), nullable=True)
+
+    # PIX (simulado): guardo o "copia e cola" e um id de transação fake,
+    # gerados quando o comprador inicia o checkout. Não é um Pix de verdade,
+    # nenhum dinheiro real circula aqui — é só pra simular a experiência.
+    pix_txid = Column(String, nullable=True)
+    pix_copia_cola = Column(String, nullable=True)
 
     # RELACIONAMENTOS INVERSOS: 
     # Permitem que, ao carregar um Projeto, eu já tenha os dados do Vendedor e do Cliente na mão.

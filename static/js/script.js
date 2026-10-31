@@ -1,9 +1,16 @@
 /**
- * RYZER ENTERPRISE - JAVASCRIPT CORE v7.0
- * Integração: Backend Render + SweetAlert2 (Visual Pro) + JWT Auth
+ * RYZER ENTERPRISE - JAVASCRIPT CORE v8.0
+ * Integração: FastAPI (same-origin) + SweetAlert2 (Visual Pro) + JWT Auth + Pix simulado
  */
 
-const API_BASE = 'https://api-mercado-local.onrender.com'; 
+// String vazia = mesma origem que serviu essa página. Funciona local
+// (uvicorn/127.0.0.1) e em qualquer deploy, sem precisar editar isso aqui.
+const API_BASE = '';
+
+function authHeaders() {
+    const token = localStorage.getItem('access_token');
+    return token ? { 'Authorization': `Bearer ${token}` } : {};
+}
 
 const Toast = Swal.mixin({
     toast: true,
@@ -168,6 +175,8 @@ function logout() {
 }
 
 let produtosCache = [];
+let categoriaAtual = 'todas';
+let ordenacaoAtual = 'relevancia';
 
 async function carregarLoja() {
     const grid = document.getElementById('grid-produtos');
@@ -188,7 +197,17 @@ function renderGrid(lista) {
     const termo = document.getElementById('campo-busca').value.toLowerCase();
     grid.innerHTML = "";
 
-    const filtrados = lista.filter(p => p.titulo.toLowerCase().includes(termo));
+    let filtrados = lista.filter(p => p.titulo.toLowerCase().includes(termo));
+
+    if (categoriaAtual !== 'todas') {
+        filtrados = filtrados.filter(p => p.categoria === categoriaAtual);
+    }
+
+    if (ordenacaoAtual === 'menor_preco') {
+        filtrados = [...filtrados].sort((a, b) => a.valor - b.valor);
+    } else if (ordenacaoAtual === 'maior_preco') {
+        filtrados = [...filtrados].sort((a, b) => b.valor - a.valor);
+    }
 
     if (filtrados.length === 0) {
         grid.innerHTML = `<div style="grid-column:1/-1; text-align:center; padding:50px; color:var(--text-muted);">Nenhum produto encontrado.</div>`;
@@ -216,9 +235,25 @@ function renderGrid(lista) {
 }
 
 function buscarProduto() { renderGrid(produtosCache); }
-function filtrarCategoria(cat) { 
+
+function filtrarCategoria(cat) {
+    categoriaAtual = cat;
+    document.querySelectorAll('.category-bar .cat-link').forEach(b => b.classList.remove('active'));
+    if (event && event.target) event.target.classList.add('active');
     Toast.fire({ icon: 'info', title: `Filtrando por: ${cat.toUpperCase()}` });
-    renderGrid(produtosCache); 
+    renderGrid(produtosCache);
+}
+
+function mostrarTodasCategorias() {
+    categoriaAtual = 'todas';
+    document.querySelectorAll('.category-bar .cat-link').forEach(b => b.classList.remove('active'));
+    if (event && event.target) event.target.classList.add('active');
+    renderGrid(produtosCache);
+}
+
+function ordenarProdutos(valor) {
+    ordenacaoAtual = valor;
+    renderGrid(produtosCache);
 }
 
 function verDetalhes(id) {
@@ -305,63 +340,118 @@ function removeCart(idx) {
 async function finalizarCompra() {
     const cart = JSON.parse(localStorage.getItem('ryzer_cart')) || [];
     if (cart.length === 0) return Toast.fire({ icon: 'warning', title: 'Carrinho vazio' });
-    
+
     const result = await Swal.fire({
         title: 'Confirmar Compra?',
-        text: `Estás a comprar ${cart.length} itens.`,
+        text: `Estás a comprar ${cart.length} ${cart.length > 1 ? 'itens' : 'item'}. Vamos gerar um Pix (simulado) pra cada um.`,
         icon: 'question',
         showCancelButton: true,
         confirmButtonColor: '#00bf63',
         cancelButtonColor: '#d33',
-        confirmButtonText: 'Sim, comprar agora!',
+        confirmButtonText: 'Gerar Pix',
         background: '#202024',
         color: '#e1e1e6'
     });
 
     if (!result.isConfirmed) return;
 
-    Swal.fire({ title: 'Processando...', didOpen: () => Swal.showLoading(), background: '#202024', color: '#e1e1e6' });
+    Swal.fire({ title: 'Gerando cobrança Pix...', didOpen: () => Swal.showLoading(), background: '#202024', color: '#e1e1e6' });
 
-    let codes = [];
-    // ARQUITETURA DE SEGURANÇA: Resgatar token
-    const token = localStorage.getItem('access_token'); 
-
+    // Gera uma cobrança Pix (simulada) para cada item do carrinho
+    const cobrancas = [];
     for (const id of cart) {
         try {
-            const res = await fetch(`${API_BASE}/projetos/${id}/pagar/`, { 
+            const res = await fetch(`${API_BASE}/projetos/${id}/checkout/pix/`, {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}` // Injeção do token JWT no cabeçalho
-                }
+                headers: authHeaders()
             });
             if (res.ok) {
-                const data = await res.json();
-                codes.push(data.codigo_verificacao);
+                cobrancas.push(await res.json());
             }
         } catch (e) { console.error(e); }
     }
 
-    if (codes.length > 0) {
+    if (cobrancas.length === 0) {
+        Swal.fire({ icon: 'error', title: 'Erro', text: 'Não foi possível gerar o Pix. Sessão expirada?', background: '#202024', color: '#e1e1e6' });
+        return;
+    }
+
+    await mostrarModalPix(cobrancas);
+}
+
+async function mostrarModalPix(cobrancas) {
+    const total = cobrancas.reduce((soma, c) => soma + c.valor, 0);
+    const primeiraCobranca = cobrancas[0];
+
+    const html = `
+        <p style="margin-bottom:10px; color:var(--text-muted)">
+            ${cobrancas.length > 1 ? `${cobrancas.length} cobranças Pix geradas — total ` : 'Total '}
+            <strong style="color:var(--primary)">${formatMoney(total)}</strong>
+        </p>
+        <img src="data:image/png;base64,${primeiraCobranca.qr_code_base64}" style="width:200px; height:200px; margin:10px auto; display:block; background:white; padding:8px; border-radius:8px;">
+        <p style="font-size:12px; color:var(--text-muted); margin-bottom:6px;">Pix copia e cola (simulado):</p>
+        <textarea readonly style="width:100%; height:60px; font-size:11px; padding:8px; border-radius:4px; border:1px solid var(--border); background:var(--dark); color:var(--text-main); resize:none;">${primeiraCobranca.pix_copia_cola}</textarea>
+        <p style="font-size:12px; color:var(--text-muted); margin-top:10px;">
+            <i class="fas fa-info-circle"></i> Isso é uma simulação para fins de demonstração — nenhum pagamento real é processado.
+        </p>
+    `;
+
+    const result = await Swal.fire({
+        title: 'Pague com Pix',
+        html,
+        showCancelButton: true,
+        confirmButtonText: 'Já paguei (simular)',
+        cancelButtonText: 'Cancelar',
+        confirmButtonColor: '#00bf63',
+        cancelButtonColor: '#d33',
+        background: '#202024',
+        color: '#e1e1e6'
+    });
+
+    if (!result.isConfirmed) {
+        Toast.fire({ icon: 'info', title: 'Pix pendente — finalize o pagamento em "Meus Pedidos" quando quiser.' });
         localStorage.setItem('ryzer_cart', JSON.stringify([]));
         updateCartBadge();
-        
+        return;
+    }
+
+    Swal.fire({ title: 'Confirmando pagamento...', didOpen: () => Swal.showLoading(), background: '#202024', color: '#e1e1e6' });
+
+    const codigos = [];
+    for (const cobranca of cobrancas) {
+        try {
+            const res = await fetch(`${API_BASE}/projetos/${cobranca.projeto_id}/pix/confirmar`, {
+                method: 'POST',
+                headers: authHeaders()
+            });
+            if (res.ok) {
+                const data = await res.json();
+                codigos.push(data.codigo_verificacao);
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    localStorage.setItem('ryzer_cart', JSON.stringify([]));
+    updateCartBadge();
+
+    if (codigos.length > 0) {
         Swal.fire({
             icon: 'success',
-            title: 'Compra Realizada!',
-            html: `Os teus códigos de acesso:<br><b style="color:var(--primary)">${codes.join('<br>')}</b><br><br>Eles foram salvos em "Meus Pedidos".`,
+            title: 'Pagamento Confirmado!',
+            html: `O dinheiro fica retido com segurança até você confirmar o recebimento.<br><br>Os teus códigos de liberação:<br><b style="color:var(--primary)">${codigos.join('<br>')}</b><br><br>Eles também ficam salvos em "Meus Pedidos".`,
             confirmButtonColor: '#00bf63',
             background: '#202024',
             color: '#e1e1e6'
         }).then(() => router('meus-pedidos'));
     } else {
-        Swal.fire({ icon: 'error', title: 'Erro', text: 'Não foi possível finalizar a compra. Sessão expirada?', background: '#202024', color: '#e1e1e6' });
+        Swal.fire({ icon: 'error', title: 'Erro', text: 'Não foi possível confirmar o pagamento.', background: '#202024', color: '#e1e1e6' });
     }
 }
 
 async function carregarDashboard() {
     const uid = localStorage.getItem('usuario_id');
     try {
-        const resTotal = await fetch(`${API_BASE}/vendedor/${uid}/total-vendas`);
+        const resTotal = await fetch(`${API_BASE}/vendedor/${uid}/total-vendas`, { headers: authHeaders() });
         if(resTotal.ok) {
             const dataTotal = await resTotal.json();
             document.getElementById('dash-total').innerText = formatMoney(dataTotal.total_vendas_concluidas || 0);
@@ -385,8 +475,10 @@ async function carregarDashboard() {
             let acao = "-";
             let statusBadge = `<span class="status-badge status-info">${p.status}</span>`;
 
-            if (p.status === 'pagamento_retido') {
-                statusBadge = `<span class="status-badge status-pending" style="color:#ffc107">Pendente</span>`;
+            if (p.status === 'aguardando_pagamento') {
+                statusBadge = `<span class="status-badge status-pending" style="color:#ffc107">Aguardando Pix</span>`;
+            } else if (p.status === 'pagamento_retido') {
+                statusBadge = `<span class="status-badge status-pending" style="color:#ffc107">Pago (em escrow)</span>`;
                 if (p.cliente_id == uid) {
                     acao = `<button onclick="liberarPagamento(${p.id})" style="color:var(--primary); font-weight:bold; background:none; border:none; cursor:pointer;">Liberar Pagamento</button>`;
                 }
@@ -420,8 +512,9 @@ async function liberarPagamento(id) {
     if (!codigo) return;
 
     try {
-        const res = await fetch(`${API_BASE}/projetos/${id}/liberar`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+        const res = await fetch(`${API_BASE}/projetos/${id}/liberar/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify({ codigo: codigo })
         });
         if (res.ok) { 
@@ -436,8 +529,8 @@ async function liberarPagamento(id) {
 async function publicarAnuncio() {
     const titulo = document.getElementById('anun-titulo').value;
     const valor = document.getElementById('anun-valor').value;
+    const categoria = document.getElementById('anun-cat').value;
     const conteudo = document.getElementById('anun-conteudo').value;
-    const uid = localStorage.getItem('usuario_id');
 
     if (!titulo || !valor || !conteudo) return Toast.fire({ icon: 'warning', title: 'Preenche tudo!' });
 
@@ -445,12 +538,13 @@ async function publicarAnuncio() {
 
     try {
         const res = await fetch(`${API_BASE}/projetos/`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify({
                 titulo: titulo,
                 valor: parseFloat(valor),
-                conteudo_digital: conteudo,
-                vendedor_id: parseInt(uid)
+                categoria: categoria,
+                conteudo_digital: conteudo
             })
         });
         if (res.ok) { 
@@ -481,19 +575,16 @@ function switchDashTab(tab) {
 
 async function carregarMeusPedidos() {
     const usuarioId = localStorage.getItem('usuario_id');
-    const token = localStorage.getItem('access_token');
 
     if (!usuarioId) {
-        window.location.href = '/login';
+        router('login');
         return;
     }
 
     try {
         const response = await fetch(`${API_BASE}/usuarios/${usuarioId}/pedidos`, {
             method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
+            headers: authHeaders()
         });
 
         if (response.ok) {
@@ -508,9 +599,14 @@ async function carregarMeusPedidos() {
             }
 
             pedidos.forEach(pedido => {
-                const infoCodigo = pedido.status === 'pagamento_retido' 
-                    ? `<p style="color: #ffc107; font-size: 13px; margin-top: 10px;">🔑 Código Escrow: <strong style="font-size:16px">${pedido.codigo_verificacao}</strong></p>` 
-                    : `<p style="color: var(--primary); font-size: 13px; margin-top: 10px;">✅ Transação Finalizada</p>`;
+                let infoCodigo;
+                if (pedido.status === 'aguardando_pagamento') {
+                    infoCodigo = `<p style="color: #ffc107; font-size: 13px; margin-top: 10px;">⏳ Aguardando confirmação do Pix</p>`;
+                } else if (pedido.status === 'pagamento_retido') {
+                    infoCodigo = `<p style="color: #ffc107; font-size: 13px; margin-top: 10px;">🔑 Código Escrow: <strong style="font-size:16px">${pedido.codigo_verificacao}</strong></p>`;
+                } else {
+                    infoCodigo = `<p style="color: var(--primary); font-size: 13px; margin-top: 10px;">✅ Transação Finalizada</p>`;
+                }
 
                 container.innerHTML += `
                     <div class="product-card fade-in">

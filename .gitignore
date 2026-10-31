@@ -9,3 +9,6 @@ __pycache__/
 
 # Banco de Dados Local (para não dar conflito com o do Render)
 *.db
+
+# Variáveis de ambiente / segredos
+.env
