@@ -19,12 +19,34 @@
 
     <div id="toast-container"></div>
 
+    <!-- Menu lateral (drawer) usado só em telas pequenas, ver script.js: toggleMenu() -->
+    <div id="mobile-drawer-overlay" class="drawer-overlay hidden" onclick="toggleMenu()"></div>
+    <aside id="mobile-drawer" class="drawer hidden" aria-label="Menu de navegação">
+        <div class="drawer-header">
+            <span class="logo"><i class="fas fa-bolt logo-icon"></i> <span class="logo-text">RYZER</span></span>
+            <button class="drawer-close" aria-label="Fechar menu" onclick="toggleMenu()"><i class="fas fa-times"></i></button>
+        </div>
+        <nav class="drawer-nav" aria-label="Categorias e conta">
+            <button onclick="router('loja'); mostrarTodasCategorias(); toggleMenu();"><i class="fas fa-home"></i> Início</button>
+            <button onclick="filtrarCategoria('hardware', null); toggleMenu();">Hardware</button>
+            <button onclick="filtrarCategoria('perifericos', null); toggleMenu();">Periféricos</button>
+            <button onclick="filtrarCategoria('computadores', null); toggleMenu();">Computadores</button>
+            <button onclick="filtrarCategoria('software', null); toggleMenu();">Cursos & Soft</button>
+            <hr>
+            <button onclick="router('dashboard'); toggleMenu();"><i class="fas fa-user-circle"></i> Minha Conta</button>
+            <button onclick="router('meus-pedidos'); toggleMenu();"><i class="fas fa-box"></i> Meus Pedidos</button>
+            <button onclick="router('carrinho'); toggleMenu();"><i class="fas fa-shopping-cart"></i> Carrinho</button>
+            <button class="drawer-highlight" onclick="router('anunciar'); toggleMenu();">QUERO VENDER</button>
+            <button class="drawer-logout" onclick="toggleMenu(); logout();"><i class="fas fa-sign-out-alt"></i> Sair</button>
+        </nav>
+    </aside>
+
     <!-- ARQUITETURA SEMÂNTICA: Substituí o <nav> global por um <header> com <nav> aninhado -->
     <header id="navbar" class="hidden">
         <div class="topbar">
             <div class="container topbar-content">
-                <span><i class="fas fa-headset"></i> Atendimento: (11) 9999-9999</span>
-                <span><i class="fas fa-shield-alt"></i> Compra 100% Segura e Garantida</span>
+                <span><i class="fas fa-flask"></i> Projeto de portfólio — pagamento via Pix simulado</span>
+                <span><i class="fas fa-shield-alt"></i> Pagamento retido em escrow até você confirmar o recebimento</span>
             </div>
         </div>
 
@@ -73,11 +95,11 @@
 
         <nav class="category-bar" aria-label="Navegação principal">
             <ul class="container category-content" style="padding: 0; margin: 0; display: flex; list-style: none;">
-                <li><button class="cat-link active" onclick="router('loja'); mostrarTodasCategorias();"><i class="fas fa-home"></i> Início</button></li>
-                <li><button class="cat-link" onclick="filtrarCategoria('hardware')">Hardware</button></li>
-                <li><button class="cat-link" onclick="filtrarCategoria('perifericos')">Periféricos</button></li>
-                <li><button class="cat-link" onclick="filtrarCategoria('computadores')">Computadores</button></li>
-                <li><button class="cat-link" onclick="filtrarCategoria('software')">Cursos & Soft</button></li>
+                <li><button class="cat-link active" onclick="router('loja'); mostrarTodasCategorias(event);"><i class="fas fa-home"></i> Início</button></li>
+                <li><button class="cat-link" onclick="filtrarCategoria('hardware', event)">Hardware</button></li>
+                <li><button class="cat-link" onclick="filtrarCategoria('perifericos', event)">Periféricos</button></li>
+                <li><button class="cat-link" onclick="filtrarCategoria('computadores', event)">Computadores</button></li>
+                <li><button class="cat-link" onclick="filtrarCategoria('software', event)">Cursos & Soft</button></li>
                 <li style="margin-left: auto;"><button class="cat-link highlight" onclick="router('anunciar')">QUERO VENDER</button></li>
             </ul>
         </nav>
@@ -147,15 +169,14 @@
             <!-- ARQUITETURA SEMÂNTICA: O banner passa a ser um <article> -->
             <article class="hero-banner">
                 <div class="hero-content">
-                    <div class="tag-promo">RYZER WEEK 🔥</div>
-                    <h1>O UPGRADE QUE<br>VOCÊ MERECE</h1>
-                    <p>Placas de vídeo, processadores e setups completos com até <strong>60% OFF</strong>.</p>
-                    <div class="timer">
-                        <i class="far fa-clock"></i> Oferta encerra em: <strong>04:23:12</strong>
-                    </div>
-                    <button class="btn-hero" onclick="document.getElementById('grid-produtos').scrollIntoView()">VER OFERTAS</button>
+                    <div class="tag-promo">PROJETO DE PORTFÓLIO</div>
+                    <h1>MARKETPLACE COM<br>ESCROW E PIX SIMULADO</h1>
+                    <p>Compre e venda hardware, periféricos e cursos com pagamento retido em escrow até a entrega ser confirmada.</p>
+                    <button class="btn-hero" onclick="document.getElementById('grid-produtos').scrollIntoView()">VER PRODUTOS</button>
                 </div>
-                <img src="https://m.media-amazon.com/images/I/71tDu30-mZL._AC_SL1500_.jpg" class="hero-img-floating" alt="Placa de Vídeo RTX">
+                <div class="hero-illustration" aria-hidden="true">
+                    <i class="fas fa-shield-halved"></i>
+                </div>
             </article>
 
             <header class="section-header">
@@ -191,15 +212,10 @@
 
                 <div class="det-info">
                     <h1 id="det-titulo">Título do Produto</h1>
-                    <div class="rating">
-                        <i class="fas fa-star"></i><i class="fas fa-star"></i><i class="fas fa-star"></i><i class="fas fa-star"></i><i class="fas fa-star-half-alt"></i>
-                        <span>(42 avaliações)</span>
-                    </div>
-                    
+
                     <div class="price-box">
-                        <span class="old-price">De: R$ ---</span>
                         <div class="current-price" id="det-valor">R$ 0,00</div>
-                        <p class="payment-info">à vista no PIX com <strong>15% OFF</strong></p>
+                        <p class="payment-info">Pagamento via Pix (simulado) — valor retido em escrow até você confirmar o recebimento</p>
                     </div>
 
                     <div class="action-box">
@@ -211,8 +227,8 @@
                     <div class="shipping-calc">
                         <i class="fas fa-truck"></i>
                         <div>
-                            <strong>Frete e Prazo:</strong>
-                            <p>Entrega Digital ou Física (Consulte o vendedor)</p>
+                            <strong>Entrega:</strong>
+                            <p>Digital ou física, conforme descrito pelo vendedor — liberada após confirmação do pagamento</p>
                         </div>
                     </div>
 
@@ -237,18 +253,14 @@
                         <span>Subtotal</span>
                         <span id="cart-subtotal">R$ 0,00</span>
                     </div>
-                    <div class="summary-row">
-                        <span>Frete</span>
-                        <span class="free">Grátis</span>
-                    </div>
                     <div class="summary-row total">
-                        <span>Total à vista</span>
+                        <span>Total</span>
                         <span id="cart-total">R$ 0,00</span>
                     </div>
                     <div class="summary-installments">
-                        ou até 12x no cartão
+                        Pagamento via Pix simulado — retido em escrow até a confirmação
                     </div>
-                    
+
                     <button onclick="finalizarCompra()" class="btn-checkout">FINALIZAR COMPRA</button>
                     <button onclick="router('loja')" class="btn-continue">Continuar Comprando</button>
                 </aside>
@@ -265,8 +277,8 @@
                         <strong id="dash-user-name">Usuário</strong>
                     </div>
                     <nav aria-label="Menu do Dashboard">
-                        <button onclick="switchDashTab('vendas')" class="dash-menu-btn active"><i class="fas fa-chart-line"></i> Minhas Vendas</button>
-                        <button onclick="switchDashTab('compras')" class="dash-menu-btn"><i class="fas fa-shopping-bag"></i> Minhas Compras</button>
+                        <button onclick="switchDashTab('vendas', event)" class="dash-menu-btn active"><i class="fas fa-chart-line"></i> Minhas Vendas</button>
+                        <button onclick="switchDashTab('compras', event)" class="dash-menu-btn"><i class="fas fa-shopping-bag"></i> Minhas Compras</button>
                         <button onclick="router('anunciar')" class="dash-menu-btn highlight"><i class="fas fa-plus"></i> Novo Anúncio</button>
                     </nav>
                 </aside>
@@ -344,38 +356,20 @@
     <footer class="main-footer hidden" id="footer">
         <div class="container footer-content">
             <section class="footer-col">
-                <h4>Institucional</h4>
-                <a href="#">Sobre a Ryzer</a>
-                <a href="#">Trabalhe Conosco</a>
-                <a href="#">Termos de Uso</a>
+                <h4>Sobre o projeto</h4>
+                <p>Marketplace com escrow e Pix simulado, construído com FastAPI + SQLAlchemy no back-end e HTML/CSS/JS puro no front-end.</p>
             </section>
             <section class="footer-col">
-                <h4>Ajuda</h4>
-                <a href="#">Central de Ajuda</a>
-                <a href="#">Trocas e Devoluções</a>
-                <a href="#">Status do Pedido</a>
-            </section>
-            <section class="footer-col">
-                <h4>Atendimento</h4>
-                <address style="font-style: normal;">
-                    <p>(11) 4002-8922</p>
-                    <p>sac@ryzer.com.br</p>
-                </address>
-                <div class="socials">
-                    <a href="#" aria-label="Instagram"><i class="fab fa-instagram"></i></a>
-                    <a href="#" aria-label="Twitter"><i class="fab fa-twitter"></i></a>
-                    <a href="#" aria-label="YouTube"><i class="fab fa-youtube"></i></a>
-                </div>
+                <h4>Como funciona</h4>
+                <p>O pagamento fica retido até o comprador confirmar o recebimento com um código de 6 dígitos. Nenhum dinheiro real circula — é tudo simulado para fins de demonstração.</p>
             </section>
             <section class="footer-col payment">
-                <h4>Pagamento</h4>
-                <i class="fab fa-cc-visa" aria-label="Visa"></i>
-                <i class="fab fa-cc-mastercard" aria-label="Mastercard"></i>
-                <i class="fas fa-barcode" aria-label="Boleto"></i> <i class="fas fa-qrcode" aria-label="Pix"></i>
+                <h4>Pagamento aceito</h4>
+                <i class="fas fa-qrcode" aria-label="Pix"></i> <span>Pix (simulado)</span>
             </section>
         </div>
         <div class="footer-bottom">
-            <p>&copy; 2026 Ryzer Tecnologia LTDA. Todos os direitos reservados.</p>
+            <p>Projeto de portfólio — Ryzer Marketplace.</p>
         </div>
     </footer>
 

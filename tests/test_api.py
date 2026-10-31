@@ -157,6 +157,30 @@ def test_apenas_comprador_pode_liberar_pagamento(client):
     assert res.status_code == 403
 
 
+def test_codigo_verificacao_aparece_em_meus_pedidos_mas_nao_na_vitrine_publica(client):
+    # Bug real que achei no front: "Meus Pedidos" mostrava "undefined" no
+    # lugar do código de liberação, porque o schema público "Projeto" não
+    # tinha esse campo. Aqui garanto que (a) o comprador vê o código em
+    # "/usuarios/{id}/pedidos" depois de confirmar o Pix, e (b) a vitrine
+    # pública ("/projetos/") continua SEM esse campo — ele não pode vazar
+    # pra qualquer pessoa que não é parte da transação.
+    _, token_vendedor = cadastrar_e_logar(client, email="vendedor@exemplo.com")
+    uid_comprador, token_comprador = cadastrar_e_logar(client, email="comprador@exemplo.com")
+
+    projeto_id = _publicar_produto(client, token_vendedor)
+    client.post(f"/projetos/{projeto_id}/checkout/pix/", headers=auth_header(token_comprador))
+    res = client.post(f"/projetos/{projeto_id}/pix/confirmar", headers=auth_header(token_comprador))
+    codigo = res.json()["codigo_verificacao"]
+
+    pedidos = client.get(f"/usuarios/{uid_comprador}/pedidos", headers=auth_header(token_comprador)).json()
+    pedido = next(p for p in pedidos if p["id"] == projeto_id)
+    assert pedido["codigo_verificacao"] == codigo
+
+    vitrine = client.get("/projetos/").json()
+    produto_na_vitrine = next(p for p in vitrine if p["id"] == projeto_id)
+    assert "codigo_verificacao" not in produto_na_vitrine
+
+
 def test_nao_pode_pagar_projeto_que_nao_esta_aberto(client):
     _, token_vendedor = cadastrar_e_logar(client, email="vendedor@exemplo.com")
     _, token_comprador1 = cadastrar_e_logar(client, email="comprador1@exemplo.com")

@@ -28,21 +28,20 @@ function formatMoney(value) {
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
 }
 
-function getImagemProduto(titulo) {
-    if (!titulo) return 'https://placehold.co/600x600/eee/ccc?text=Ryzer';
-    const t = titulo.toLowerCase();
-    
-    if(t.includes('rtx') || t.includes('gtx')) return 'https://m.media-amazon.com/images/I/71tDu30-mZL._AC_SL1500_.jpg';
-    if(t.includes('ryzen') || t.includes('intel')) return 'https://m.media-amazon.com/images/I/51f2hkWjTlL._AC_SL1000_.jpg';
-    if(t.includes('memória') || t.includes('ram')) return 'https://m.media-amazon.com/images/I/61p3lA4N3uL._AC_SL1134_.jpg';
-    if(t.includes('ssd') || t.includes('nvme')) return 'https://m.media-amazon.com/images/I/71F9+Wc-kOL._AC_SL1500_.jpg';
-    if(t.includes('mouse')) return 'https://resource.logitech.com/content/dam/gaming/en/products/g502-lightspeed-gaming-mouse/g502-lightspeed-gallery-1.png';
-    if(t.includes('teclado')) return 'https://resource.logitechg.com/w_692,c_lpad,ar_4:3,q_auto:best,f_auto,b_rgb:000000/content/dam/gaming/en/products/pro-x-keyboard/pro-x-keyboard-gallery-1.png';
-    if(t.includes('monitor')) return 'https://www.lg.com/br/images/monitores/md06155636/gallery/medium01.jpg';
-    if(t.includes('headset')) return 'https://m.media-amazon.com/images/I/61CGHv6kmWL._AC_SL1000_.jpg';
-    if(t.includes('curso') || t.includes('python')) return 'https://placehold.co/600x600/00bf63/ffffff?text=Curso+Dev';
-    
-    return `https://placehold.co/600x600/18181b/e1e1e6?text=${encodeURIComponent(titulo.substring(0,10))}`;
+// Ícones próprios por categoria (SVG inline, sem depender de CDN de
+// terceiros nem de fotos de marca que não são do projeto). Cada categoria
+// tem seu próprio ícone Font Awesome + cor, renderizados num fundo
+// uniforme — não é uma foto real do produto, é só uma identidade visual.
+const CATEGORIA_ICONE = {
+    hardware:     { icon: 'fa-microchip',     cor: '#00bf63' },
+    perifericos:  { icon: 'fa-keyboard',      cor: '#ff6500' },
+    computadores: { icon: 'fa-desktop',       cor: '#3b82f6' },
+    software:     { icon: 'fa-graduation-cap', cor: '#a855f7' },
+};
+
+function getImagemProduto(categoria, tamanho = 72) {
+    const conf = CATEGORIA_ICONE[categoria] || { icon: 'fa-box', cor: '#a8a8b3' };
+    return `<i class="fas ${conf.icon}" style="font-size: ${tamanho}px; color: ${conf.cor};" aria-hidden="true"></i>`;
 }
 
 function router(tela) {
@@ -80,12 +79,8 @@ function router(tela) {
 window.onload = () => localStorage.getItem('usuario_id') ? router('loja') : router('login');
 
 function toggleMenu() {
-    Swal.fire({
-        icon: 'info',
-        title: 'Versão Mobile',
-        text: 'O menu responsivo está sendo otimizado para sua experiência.',
-        confirmButtonColor: '#00bf63'
-    });
+    document.getElementById('mobile-drawer').classList.toggle('hidden');
+    document.getElementById('mobile-drawer-overlay').classList.toggle('hidden');
 }
 
 async function fazerLogin() {
@@ -215,17 +210,15 @@ function renderGrid(lista) {
     }
 
     filtrados.forEach(p => {
-        const img = getImagemProduto(p.titulo);
         grid.innerHTML += `
             <div class="product-card fade-in">
                 <div class="prod-img-box" onclick="verDetalhes(${p.id})" style="cursor: pointer;">
-                    <img src="${img}" class="prod-img">
+                    ${getImagemProduto(p.categoria)}
                 </div>
                 <div class="prod-info">
                     <h3 title="${p.titulo}">${p.titulo}</h3>
-                    <div class="old-price">R$ ${(p.valor * 1.3).toFixed(2)}</div>
                     <span class="prod-price">${formatMoney(p.valor)}</span>
-                    <span class="payment-info">à vista no PIX</span>
+                    <span class="payment-info">Pix simulado — pagamento retido em escrow</span>
                 </div>
                 <button onclick="addCart(${p.id})" class="btn-cart btn-buy-large">
                     <i class="fas fa-cart-plus"></i> COMPRAR
@@ -236,18 +229,18 @@ function renderGrid(lista) {
 
 function buscarProduto() { renderGrid(produtosCache); }
 
-function filtrarCategoria(cat) {
+function filtrarCategoria(cat, evt) {
     categoriaAtual = cat;
     document.querySelectorAll('.category-bar .cat-link').forEach(b => b.classList.remove('active'));
-    if (event && event.target) event.target.classList.add('active');
+    if (evt && evt.currentTarget) evt.currentTarget.classList.add('active');
     Toast.fire({ icon: 'info', title: `Filtrando por: ${cat.toUpperCase()}` });
     renderGrid(produtosCache);
 }
 
-function mostrarTodasCategorias() {
+function mostrarTodasCategorias(evt) {
     categoriaAtual = 'todas';
     document.querySelectorAll('.category-bar .cat-link').forEach(b => b.classList.remove('active'));
-    if (event && event.target) event.target.classList.add('active');
+    if (evt && evt.currentTarget) evt.currentTarget.classList.add('active');
     renderGrid(produtosCache);
 }
 
@@ -260,10 +253,12 @@ function verDetalhes(id) {
     const p = produtosCache.find(i => i.id === id);
     if (!p) return;
 
-    document.getElementById('det-img-container').innerHTML = `<img src="${getImagemProduto(p.titulo)}" style="width: 100%; border-radius: 12px;">`;
+    document.getElementById('det-img-container').innerHTML = getImagemProduto(p.categoria, 160);
     document.getElementById('det-titulo').innerText = p.titulo;
     document.getElementById('det-valor').innerText = formatMoney(p.valor);
-    document.getElementById('det-desc').innerText = `Vendedor ID: #${p.vendedor_id}\n\nProduto verificado Ryzer.\nGarantia de entrega via sistema de Escrow (Pagamento seguro).`;
+    document.getElementById('bread-cat').innerText = p.categoria;
+    document.getElementById('bread-nome').innerText = p.titulo;
+    document.getElementById('det-desc').innerText = `Vendedor #${p.vendedor_id}\n\nO pagamento fica retido em escrow até você confirmar o recebimento com o código enviado após a compra.`;
     
     const btn = document.getElementById('btn-add-cart-detail');
     const newBtn = btn.cloneNode(true);
@@ -309,10 +304,9 @@ function renderCarrinho() {
         const p = produtosCache.find(i => i.id === id);
         if (p) {
             total += p.valor;
-            const img = getImagemProduto(p.titulo);
             container.innerHTML += `
                 <div class="cart-item fade-in">
-                    <img src="${img}">
+                    <div class="cart-item-icon">${getImagemProduto(p.categoria)}</div>
                     <div style="flex:1">
                         <strong>${p.titulo}</strong><br>
                         <small style="color:var(--text-muted)">Vendedor #${p.vendedor_id}</small>
@@ -562,15 +556,17 @@ async function publicarAnuncio() {
     } catch (e) { Swal.fire({title: 'Erro', text: 'Conexão falhou', icon: 'error', background: '#202024', color: '#e1e1e6'}); }
 }
 
-function switchDashTab(tab) {
+function switchDashTab(tab, evt) {
     document.getElementById('tab-vendas').classList.add('hidden');
     document.getElementById('tab-compras').classList.add('hidden');
     document.getElementById(`tab-${tab}`).classList.remove('hidden');
-    
-    document.querySelectorAll('.dash-menu-btn').forEach(b => b.classList.remove('active'));
-    event.target.classList.add('active');
 
-    if(tab === 'compras') carregarMinhasCompras(); 
+    document.querySelectorAll('.dash-menu-btn').forEach(b => b.classList.remove('active'));
+    // currentTarget (não target): clicar no ícone dentro do botão não deve
+    // marcar o ícone como "ativo" em vez do botão.
+    if (evt && evt.currentTarget) evt.currentTarget.classList.add('active');
+
+    if(tab === 'compras') carregarMinhasCompras();
 }
 
 async function carregarMeusPedidos() {

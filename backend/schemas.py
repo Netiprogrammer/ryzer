@@ -76,6 +76,18 @@ class ProjetoLiberado(Projeto):
     # Aí eu libero o campo 'conteudo_digital' pro comprador ver.
     conteudo_digital: str
 
+class PedidoComprador(Projeto):
+    """
+    Variante do Projeto usada SÓ na rota "/usuarios/{id}/pedidos" (que já
+    confere que quem pergunta é o próprio dono do pedido). Expõe o código
+    de liberação do escrow pro comprador conseguir ver de novo sempre que
+    quiser, sem depender de ter guardado o toast do momento da confirmação.
+
+    Importante: NUNCA usar esse esquema na listagem pública de projetos
+    ("/projetos/") — lá o código vazaria pra qualquer pessoa.
+    """
+    codigo_verificacao: Optional[str] = None
+
 # =========================================================
 # BLOCO 3.1: PIX (SIMULADO)
 # =========================================================

@@ -84,7 +84,7 @@ def cadastrar_usuario(usuario: schemas.UsuarioCreate, db: Session = Depends(get_
         raise HTTPException(status_code=400, detail="E-mail já cadastrado.")
     return crud.create_usuario(db=db, usuario=usuario)
 
-@app.get("/usuarios/{usuario_id}/pedidos", response_model=List[schemas.Projeto], tags=["Usuários"])
+@app.get("/usuarios/{usuario_id}/pedidos", response_model=List[schemas.PedidoComprador], tags=["Usuários"])
 def listar_meus_pedidos(
     usuario_id: int,
     current_user: models.Usuario = Depends(security.get_current_user),
