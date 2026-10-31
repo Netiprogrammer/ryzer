@@ -4,9 +4,15 @@ import os
 # Adiciona o diretório atual ao path para achar o pacote backend
 sys.path.append(os.getcwd())
 
+from sqlalchemy import text
+
 from backend.database import SessionLocal, engine
 from backend.models import Usuario, Projeto, StatusProjeto, Base
 from backend.security import gerar_senha_hash
+
+# Chave arbitrária (só precisa ser constante) para o advisory lock do
+# Postgres usado abaixo, evitando corrida entre múltiplos processos.
+_ADVISORY_LOCK_KEY = 72_700_001
 
 PRODUTOS_DEMO = [
     ("Placa de Vídeo RTX 4070 Super 12GB", 4299.90, "hardware",
@@ -26,7 +32,34 @@ PRODUTOS_DEMO = [
 
 def criar_usuario_inicial():
     print("🔄 Verificando integridade do banco de dados...")
-    Base.metadata.create_all(bind=engine)
+
+    # Em produção o Render sobe a aplicação com vários processos (workers)
+    # ao mesmo tempo, e cada um chama essa função no próprio startup. Sem
+    # proteção, todos tentam criar as tabelas/tipos e inserir o mesmo
+    # usuário admin/vendedor ao mesmo tempo — o Postgres rejeita a criação
+    # duplicada (do tipo enum, ou do e-mail que é unique), abortando a
+    # transação de quem perde a corrida. Um advisory lock do Postgres
+    # serializa a função inteira (schema + seed): só um processo passa
+    # por vez, os demais esperam a vez e, ao continuar, tudo já existe
+    # (create_all/seed são idempotentes, não fazem nada de novo).
+    # SQLite (uso local/dev, processo único) não tem essa corrida, então
+    # pula o lock, que nem existe nesse dialeto.
+    usa_lock_postgres = engine.dialect.name == "postgresql"
+    lock_conn = None
+    if usa_lock_postgres:
+        lock_conn = engine.connect()
+        lock_conn.execute(text("SELECT pg_advisory_lock(:key)"), {"key": _ADVISORY_LOCK_KEY})
+
+    try:
+        Base.metadata.create_all(bind=engine)
+        _seed_dados_iniciais()
+    finally:
+        if lock_conn is not None:
+            lock_conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _ADVISORY_LOCK_KEY})
+            lock_conn.close()
+
+
+def _seed_dados_iniciais():
     db = SessionLocal()
 
     try:
