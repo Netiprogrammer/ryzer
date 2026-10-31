@@ -1,0 +1,11 @@
+# Ambiente Virtual
+venv/
+.venv/
+env/
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# Banco de Dados Local (para não dar conflito com o do Render)
+*.db
