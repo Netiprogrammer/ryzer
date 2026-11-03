@@ -1,7 +1,8 @@
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,6 +43,47 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Ryzer Marketplace", lifespan=lifespan)
+
+# --- ERROS DE VALIDAÇÃO ---
+# O erro 422 padrão do FastAPI devolve, junto de cada problema, o valor que o
+# cliente enviou ("input"). Isso tem dois problemas: (1) com NaN/Infinity o
+# próprio JSON de resposta não consegue ser gerado e a requisição vira 500;
+# (2) ecoa de volta o que foi digitado, inclusive senhas. Aqui devolvemos só
+# uma mensagem legível em português, sem repetir a entrada do usuário.
+_NOMES_CAMPOS = {
+    "titulo": "Título", "valor": "Valor", "categoria": "Categoria",
+    "conteudo_digital": "Conteúdo a entregar", "nome": "Nome",
+    "email": "E-mail", "senha": "Senha", "codigo": "Código",
+}
+
+
+def _mensagem_amigavel(erro: dict) -> str:
+    campo = _NOMES_CAMPOS.get(str(erro["loc"][-1]), str(erro["loc"][-1]))
+    tipo, ctx = erro["type"], erro.get("ctx", {})
+    if tipo == "missing":
+        return f"{campo} é obrigatório."
+    if tipo == "string_too_short":
+        return f"{campo}: mínimo de {ctx.get('min_length')} caracteres."
+    if tipo == "string_too_long":
+        return f"{campo}: máximo de {ctx.get('max_length')} caracteres."
+    if tipo == "greater_than":
+        return f"{campo} deve ser maior que {ctx.get('gt'):g}."
+    if tipo == "less_than_equal":
+        return f"{campo} deve ser no máximo {ctx.get('le'):g}."
+    if tipo in ("finite_number", "float_parsing", "float_type"):
+        return f"{campo} deve ser um número válido."
+    if tipo == "literal_error":
+        return f"{campo} tem um valor que não é aceito."
+    if tipo == "value_error":
+        # Mensagens que nós mesmos escrevemos nos validators (já em português).
+        return str(erro["msg"]).removeprefix("Value error, ")
+    return f"{campo} é inválido."
+
+
+@app.exception_handler(RequestValidationError)
+async def tratar_erro_de_validacao(request: Request, exc: RequestValidationError):
+    mensagens = [_mensagem_amigavel(e) for e in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": " ".join(mensagens)})
 
 app.add_middleware(
     CORSMiddleware,
@@ -92,7 +134,18 @@ def listar_meus_pedidos(
 ):
     if current_user.id != usuario_id:
         raise HTTPException(status_code=403, detail="Você só pode ver os seus próprios pedidos.")
-    return crud.get_projetos_por_cliente(db, usuario_id)
+
+    pedidos = [
+        schemas.PedidoComprador.model_validate(p)
+        for p in crud.get_projetos_por_cliente(db, usuario_id)
+    ]
+    # O conteúdo digital só é entregue depois que o comprador libera o
+    # pagamento. Antes disso (aguardando Pix / pagamento retido) ele não sai
+    # nem pra quem comprou — senão o escrow não faria sentido.
+    for pedido in pedidos:
+        if pedido.status != schemas.StatusProjetoSchema.FINALIZADO:
+            pedido.conteudo_digital = None
+    return pedidos
 
 @app.get("/vendedor/{vendedor_id}/total-vendas", tags=["Usuários"])
 def total_vendas_vendedor(
@@ -132,6 +185,12 @@ def iniciar_checkout_pix(
     Gera uma cobrança Pix SIMULADA para o projeto (QR code + copia-e-cola).
     Nenhum pagamento real acontece aqui — é só para demonstrar o fluxo.
     """
+    # Ninguém compra o próprio anúncio (senão dava pra "vender" pra si mesmo
+    # e inflar o saldo/itens vendidos sem comprador de verdade).
+    anuncio = crud.get_projeto_by_id(db, projeto_id)
+    if anuncio and anuncio.vendedor_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Você não pode comprar o seu próprio anúncio.")
+
     resultado = crud.criar_cobranca_pix(db, projeto_id=projeto_id, cliente_id=current_user.id)
     if not resultado:
         raise HTTPException(status_code=404, detail="Projeto não encontrado ou não está mais disponível.")

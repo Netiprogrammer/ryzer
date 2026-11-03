@@ -1,7 +1,22 @@
-from pydantic import BaseModel, ConfigDict, EmailStr
+import re
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime
 from enum import Enum
-from typing import Optional, List
+from typing import Optional, List, Literal
+
+# Categorias que a vitrine conhece (o front tem um ícone por categoria).
+# "geral" é o valor padrão antigo, mantido pra não quebrar anúncios existentes.
+Categoria = Literal["hardware", "perifericos", "computadores", "software", "geral"]
+
+# Validação simples de e-mail (sem dependência extra): algo@dominio.tld.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# O bcrypt só considera os primeiros 72 bytes da senha; limitar o tamanho
+# evita senhas "truncadas em silêncio" e entradas absurdamente grandes.
+SENHA_MIN, SENHA_MAX = 6, 72
+
+# Teto de preço: evita valores como 1e308 que estouram a formatação/contas.
+VALOR_MAX = 1_000_000
 
 # =========================================================
 # BLOCO 1: OPÇÕES PADRONIZADAS (ENUM)
@@ -22,19 +37,47 @@ class StatusProjetoSchema(str, Enum):
 # BLOCO 2: CONTRATOS DE USUÁRIO
 # =========================================================
 
+def normalizar_email(valor: str) -> str:
+    """Tira espaços e põe em minúsculas, pra 'Ana@x.com' e 'ana@x.com' serem a mesma conta."""
+    return valor.strip().lower()
+
+
 class UsuarioBase(BaseModel):
     # O básico que todo usuário tem que ter
-    nome: str
-    email: str
+    nome: str = Field(min_length=1, max_length=80)
+    email: str = Field(max_length=254)
+
+    @field_validator("nome")
+    @classmethod
+    def _nome_sem_espacos_nas_pontas(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("O nome não pode ficar em branco.")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def _email_valido(cls, v: str) -> str:
+        v = normalizar_email(v)
+        if not _EMAIL_RE.match(v):
+            raise ValueError("E-mail inválido.")
+        return v
 
 class UsuarioCreate(UsuarioBase):
     # Na hora de criar, eu exijo a senha em texto puro (depois o CRUD faz o hash)
-    senha: str
+    senha: str = Field(min_length=SENHA_MIN, max_length=SENHA_MAX)
 
 class UsuarioLogin(BaseModel):
-    # O que o cara digita na tela de login
-    email: str
-    senha: str
+    # O que o cara digita na tela de login. Aqui não exigimos o tamanho mínimo
+    # da senha (contas antigas/de demonstração podem ter regras diferentes),
+    # só normalizamos o e-mail e limitamos o tamanho.
+    email: str = Field(max_length=254)
+    senha: str = Field(max_length=256)
+
+    @field_validator("email")
+    @classmethod
+    def _email_normalizado(cls, v: str) -> str:
+        return normalizar_email(v)
 
 class Usuario(UsuarioBase):
     # O que o sistema devolve: aqui eu já mando o ID do banco
@@ -49,6 +92,10 @@ class Usuario(UsuarioBase):
 
 class ProjetoBase(BaseModel):
     # Campos que aparecem tanto no anúncio quanto na venda
+    # Aqui (base, que também é usada nas RESPOSTAS) fica tudo permissivo de
+    # propósito: se um anúncio antigo do banco tiver, por exemplo, uma
+    # categoria que não existe mais, a vitrine não pode quebrar por isso.
+    # As regras estritas valem só na ENTRADA, em ProjetoCreate.
     titulo: str
     valor: float
     categoria: str = "geral"
@@ -57,7 +104,20 @@ class ProjetoCreate(ProjetoBase):
     # Quando o vendedor cria o anúncio, ele já define o que vai ser entregue (link/curso).
     # Não peço mais vendedor_id aqui: quem cria o anúncio é sempre o usuário
     # autenticado (pego do token), nunca um valor que o cliente poderia forjar.
-    conteudo_digital: str
+    titulo: str = Field(min_length=3, max_length=120)
+    # allow_inf_nan=False barra NaN/Infinity (o JSON do Python aceita esses
+    # literais); gt=0 barra preço zero/negativo; le=VALOR_MAX barra 1e308.
+    valor: float = Field(gt=0, le=VALOR_MAX, allow_inf_nan=False)
+    categoria: Categoria = "geral"
+    conteudo_digital: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("titulo", "conteudo_digital")
+    @classmethod
+    def _sem_espacos_nas_pontas(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Campo não pode ficar em branco.")
+        return v
 
 class Projeto(ProjetoBase):
     # Esse é o objeto completo que circula no sistema
@@ -85,8 +145,15 @@ class PedidoComprador(Projeto):
 
     Importante: NUNCA usar esse esquema na listagem pública de projetos
     ("/projetos/") — lá o código vazaria pra qualquer pessoa.
+
+    O 'conteudo_digital' (o que o comprador de fato comprou) também só sai
+    aqui, e só depois que o pagamento é liberado (status "finalizado") — a
+    rota em main.py zera o campo nos outros status. Sem isso, o comprador
+    só via o conteúdo uma única vez, na resposta de "/liberar/", e perdia
+    o acesso se fechasse a tela.
     """
     codigo_verificacao: Optional[str] = None
+    conteudo_digital: Optional[str] = None
 
 # =========================================================
 # BLOCO 3.1: PIX (SIMULADO)
@@ -114,4 +181,4 @@ class ValidarCodigo(BaseModel):
     Esse é o contrato para a liberação: o vendedor precisa 
     enviar exatamente um campo chamado 'codigo' com os 6 dígitos.
     """
-    codigo: str
+    codigo: str = Field(min_length=1, max_length=32)

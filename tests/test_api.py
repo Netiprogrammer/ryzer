@@ -236,3 +236,131 @@ def test_home_page_carrega(client):
     res = client.get("/")
     assert res.status_code == 200
     assert "text/html" in res.headers["content-type"]
+
+
+# ---------------------------------------------------------------------------
+# Validação de entrada (achados da auditoria: preço negativo/NaN, senha de
+# 1 caractere, e-mail sem validar, anúncio com título de 100 KB...)
+# ---------------------------------------------------------------------------
+
+import pytest
+
+JSON = {"Content-Type": "application/json"}
+
+
+@pytest.mark.parametrize("valor_json", ["-50", "0", "NaN", "Infinity", "1e308"])
+def test_anuncio_rejeita_valor_invalido(client, valor_json):
+    _, token = cadastrar_e_logar(client)
+    corpo = '{"titulo": "Produto X", "valor": %s, "conteudo_digital": "x"}' % valor_json
+    res = client.post("/projetos/", content=corpo, headers={**JSON, **auth_header(token)})
+    assert res.status_code == 422, res.text
+
+
+@pytest.mark.parametrize("campos", [
+    {"titulo": "ab"},                      # curto demais
+    {"titulo": "A" * 5000},                # longo demais
+    {"titulo": "   "},                     # só espaços
+    {"categoria": "categoria-inexistente"},
+    {"conteudo_digital": "   "},
+    {"conteudo_digital": "x" * 5000},
+])
+def test_anuncio_rejeita_campos_invalidos(client, campos):
+    _, token = cadastrar_e_logar(client)
+    corpo = {"titulo": "Produto X", "valor": 10.0, "categoria": "hardware", "conteudo_digital": "x", **campos}
+    res = client.post("/projetos/", json=corpo, headers=auth_header(token))
+    assert res.status_code == 422, res.text
+
+
+def test_erro_de_validacao_nao_ecoa_a_entrada_do_usuario(client):
+    # O 422 padrão devolvia o que foi digitado (inclusive a senha) em "input".
+    res = client.post("/usuarios/", json={"nome": "Ana", "email": "ana@exemplo.com", "senha": "senha-curta-secreta"[:5]})
+    assert res.status_code == 422
+    assert isinstance(res.json()["detail"], str)       # mensagem legível pro front
+    assert "input" not in res.text and "senh" not in res.text.replace("Senha", "")
+
+
+@pytest.mark.parametrize("corpo", [
+    {"nome": "Ana", "email": "ana@exemplo.com", "senha": "123"},          # senha curta
+    {"nome": "Ana", "email": "ana@exemplo.com", "senha": "x" * 100},      # acima do limite do bcrypt
+    {"nome": "Ana", "email": "isso-nao-e-email", "senha": "123456"},
+    {"nome": "   ", "email": "ana@exemplo.com", "senha": "123456"},
+])
+def test_cadastro_rejeita_dados_invalidos(client, corpo):
+    assert client.post("/usuarios/", json=corpo).status_code == 422
+
+
+def test_email_nao_diferencia_maiusculas_de_minusculas(client):
+    assert client.post("/usuarios/", json={"nome": "Ana", "email": "Ana@Exemplo.com", "senha": "123456"}).status_code == 200
+    # Mesmo e-mail com outra caixa/espaços não pode virar uma segunda conta...
+    res = client.post("/usuarios/", json={"nome": "Outra", "email": "  ana@exemplo.com ", "senha": "123456"})
+    assert res.status_code == 400
+    # ...e o login funciona independentemente da caixa.
+    res = client.post("/login/", json={"email": "ANA@EXEMPLO.COM", "senha": "123456"})
+    assert res.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Regras de negócio
+# ---------------------------------------------------------------------------
+
+def test_vendedor_nao_pode_comprar_o_proprio_anuncio(client):
+    _, token_vendedor = cadastrar_e_logar(client, email="vendedor@exemplo.com")
+    projeto_id = _publicar_produto(client, token_vendedor)
+
+    res = client.post(f"/projetos/{projeto_id}/checkout/pix/", headers=auth_header(token_vendedor))
+    assert res.status_code == 400
+
+    # O anúncio continua à venda (não ficou preso em "aguardando pagamento").
+    produto = next(p for p in client.get("/projetos/").json() if p["id"] == projeto_id)
+    assert produto["status"] == "aberto"
+
+
+def test_conteudo_digital_so_aparece_em_pedidos_depois_de_liberar(client):
+    _, token_vendedor = cadastrar_e_logar(client, email="vendedor@exemplo.com")
+    uid_comprador, token_comprador = cadastrar_e_logar(client, email="comprador@exemplo.com")
+    projeto_id = _publicar_produto(client, token_vendedor)
+
+    def meu_pedido():
+        pedidos = client.get(f"/usuarios/{uid_comprador}/pedidos", headers=auth_header(token_comprador)).json()
+        return next(p for p in pedidos if p["id"] == projeto_id)
+
+    client.post(f"/projetos/{projeto_id}/checkout/pix/", headers=auth_header(token_comprador))
+    assert meu_pedido()["conteudo_digital"] is None          # aguardando Pix
+
+    codigo = client.post(f"/projetos/{projeto_id}/pix/confirmar", headers=auth_header(token_comprador)).json()["codigo_verificacao"]
+    assert meu_pedido()["conteudo_digital"] is None          # pago, mas ainda em escrow
+
+    client.post(f"/projetos/{projeto_id}/liberar/", json={"codigo": codigo}, headers=auth_header(token_comprador))
+    # Depois de liberado, o comprador consegue rever o conteúdo quando quiser
+    # (antes ele só vinha uma vez na resposta de "/liberar/" e se perdia).
+    assert meu_pedido()["conteudo_digital"] == "link-curso-secreto"
+
+    # E a vitrine pública continua sem expor o conteúdo.
+    publico = next(p for p in client.get("/projetos/").json() if p["id"] == projeto_id)
+    assert "conteudo_digital" not in publico
+
+
+def test_liberar_com_codigo_nao_ascii_responde_400_e_nao_500(client):
+    _, token_vendedor = cadastrar_e_logar(client, email="vendedor@exemplo.com")
+    _, token_comprador = cadastrar_e_logar(client, email="comprador@exemplo.com")
+    projeto_id = _publicar_produto(client, token_vendedor)
+    client.post(f"/projetos/{projeto_id}/checkout/pix/", headers=auth_header(token_comprador))
+    client.post(f"/projetos/{projeto_id}/pix/confirmar", headers=auth_header(token_comprador))
+
+    res = client.post(f"/projetos/{projeto_id}/liberar/", json={"codigo": "códígo✓"}, headers=auth_header(token_comprador))
+    assert res.status_code == 400
+
+
+def test_total_de_vendas_soma_apenas_finalizados(client):
+    uid_vendedor, token_vendedor = cadastrar_e_logar(client, email="vendedor@exemplo.com")
+    _, token_comprador = cadastrar_e_logar(client, email="comprador@exemplo.com")
+
+    vendido = _publicar_produto(client, token_vendedor, valor=250.0)
+    _publicar_produto(client, token_vendedor, valor=999.0)  # continua aberto: não conta
+
+    client.post(f"/projetos/{vendido}/checkout/pix/", headers=auth_header(token_comprador))
+    codigo = client.post(f"/projetos/{vendido}/pix/confirmar", headers=auth_header(token_comprador)).json()["codigo_verificacao"]
+    client.post(f"/projetos/{vendido}/liberar/", json={"codigo": codigo}, headers=auth_header(token_comprador))
+
+    res = client.get(f"/vendedor/{uid_vendedor}/total-vendas", headers=auth_header(token_vendedor))
+    assert res.json() == {"total_vendas_concluidas": 250.0, "itens_vendidos": 1}

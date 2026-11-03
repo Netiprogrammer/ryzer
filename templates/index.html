@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Ryzer - O maior marketplace de hardware e software do Brasil.">
+    <meta name="description" content="Ryzer - marketplace de hardware e software com pagamento em escrow e Pix simulado. Projeto de portfólio.">
     <title>Ryzer | Hardware, Games e Info</title>
     
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
@@ -267,6 +267,11 @@
             </div>
         </section>
 
+        <section id="sec-meus-pedidos" class="page-container hidden fade-in">
+            <h2 class="section-title"><i class="fas fa-box"></i> Meus Pedidos</h2>
+            <div id="grid-pedidos-page" class="product-grid"></div>
+        </section>
+
         <section id="sec-dashboard" class="page-container hidden fade-in">
             <h2 class="section-title">Painel de Controle</h2>
             
@@ -295,10 +300,10 @@
                                 <h3 id="dash-count">0</h3>
                             </article>
                         </div>
-                        <h3>Histórico de Vendas</h3>
+                        <h3>Meus Anúncios e Vendas</h3>
                         <div class="table-responsive">
                             <table class="ryzer-table">
-                                <thead><tr><th>Produto</th><th>Valor</th><th>Status</th><th>Ação</th></tr></thead>
+                                <thead><tr><th>Produto</th><th>Valor</th><th>Status</th></tr></thead>
                                 <tbody id="lista-vendas-table"></tbody>
                             </table>
                         </div>
@@ -328,7 +333,7 @@
                     <div class="form-row">
                         <div class="form-group">
                             <label for="anun-valor">Preço (R$)</label>
-                            <input id="anun-valor" type="number" step="0.01" class="modern-input" placeholder="0.00" required>
+                            <input id="anun-valor" type="number" step="0.01" min="0.01" max="1000000" class="modern-input" placeholder="0.00" required>
                         </div>
                         <div class="form-group">
                             <label for="anun-cat">Categoria</label>

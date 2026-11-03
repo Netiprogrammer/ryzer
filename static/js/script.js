@@ -28,6 +28,22 @@ function formatMoney(value) {
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
 }
 
+// Escapa texto vindo do servidor/usuário antes de colocá-lo num template de
+// innerHTML. Sem isso, um anúncio com título tipo <img onerror=...> executava
+// script no navegador de quem abrisse a vitrine (XSS armazenado), com acesso
+// ao token de login. REGRA: todo dado que não é número/constante nossa e vai
+// dentro de uma string HTML tem que passar por esc().
+function esc(valor) {
+    return String(valor ?? '').replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+}
+
+// Mensagem de erro vinda da API (o backend devolve "detail" como texto).
+function msgErro(data, padrao) {
+    return (data && typeof data.detail === 'string' && data.detail) || padrao;
+}
+
 // Ícones próprios por categoria (SVG inline, sem depender de CDN de
 // terceiros nem de fotos de marca que não são do projeto). Cada categoria
 // tem seu próprio ícone Font Awesome + cor, renderizados num fundo
@@ -67,7 +83,7 @@ function router(tela) {
         if(tela === 'loja') carregarLoja();
         if(tela === 'carrinho') renderCarrinho();
         if(tela === 'dashboard') carregarDashboard();
-        if(tela === 'meus-pedidos') carregarPedidos();
+        if(tela === 'meus-pedidos') carregarPedidos('grid-pedidos-page');
         if(tela === 'login' || tela === 'cadastro') router('loja');
     } else {
         if(nav) nav.classList.add('hidden');
@@ -108,13 +124,13 @@ async function fazerLogin() {
             localStorage.setItem('access_token', data.access_token); 
             Swal.close();
             
-            Toast.fire({ icon: 'success', title: `Bem-vindo, ${data.nome}!` });
+            Toast.fire({ icon: 'success', title: `Bem-vindo, ${esc(data.nome)}!` });
             router('loja');
         } else {
             Swal.fire({
                 icon: 'error',
                 title: 'Acesso Negado',
-                text: data.detail || 'E-mail ou senha incorretos',
+                text: msgErro(data, 'E-mail ou senha incorretos'),
                 confirmButtonColor: '#ff3b30'
             });
         }
@@ -146,7 +162,7 @@ async function cadastrar() {
             }).then(() => router('login'));
         } else { 
             const err = await res.json();
-            Swal.fire({ icon: 'error', title: 'Erro', text: err.detail });
+            Swal.fire({ icon: 'error', title: 'Não foi possível criar a conta', text: msgErro(err, 'Verifique os dados e tente novamente.') });
         }
     } catch (e) {
         Swal.fire({ icon: 'error', title: 'Erro de Conexão', text: 'Tente novamente mais tarde.' });
@@ -216,7 +232,7 @@ function renderGrid(lista) {
                     ${getImagemProduto(p.categoria)}
                 </div>
                 <div class="prod-info">
-                    <h3 title="${p.titulo}">${p.titulo}</h3>
+                    <h3 title="${esc(p.titulo)}">${esc(p.titulo)}</h3>
                     <span class="prod-price">${formatMoney(p.valor)}</span>
                     <span class="payment-info">Pix simulado — pagamento retido em escrow</span>
                 </div>
@@ -308,7 +324,7 @@ function renderCarrinho() {
                 <div class="cart-item fade-in">
                     <div class="cart-item-icon">${getImagemProduto(p.categoria)}</div>
                     <div style="flex:1">
-                        <strong>${p.titulo}</strong><br>
+                        <strong>${esc(p.titulo)}</strong><br>
                         <small style="color:var(--text-muted)">Vendedor #${p.vendedor_id}</small>
                     </div>
                     <div class="text-right">
@@ -384,7 +400,7 @@ async function mostrarModalPix(cobrancas) {
         </p>
         <img src="data:image/png;base64,${primeiraCobranca.qr_code_base64}" style="width:200px; height:200px; margin:10px auto; display:block; background:white; padding:8px; border-radius:8px;">
         <p style="font-size:12px; color:var(--text-muted); margin-bottom:6px;">Pix copia e cola (simulado):</p>
-        <textarea readonly style="width:100%; height:60px; font-size:11px; padding:8px; border-radius:4px; border:1px solid var(--border); background:var(--dark); color:var(--text-main); resize:none;">${primeiraCobranca.pix_copia_cola}</textarea>
+        <textarea readonly style="width:100%; height:60px; font-size:11px; padding:8px; border-radius:4px; border:1px solid var(--border); background:var(--dark); color:var(--text-main); resize:none;">${esc(primeiraCobranca.pix_copia_cola)}</textarea>
         <p style="font-size:12px; color:var(--text-muted); margin-top:10px;">
             <i class="fas fa-info-circle"></i> Isso é uma simulação para fins de demonstração — nenhum pagamento real é processado.
         </p>
@@ -432,7 +448,7 @@ async function mostrarModalPix(cobrancas) {
         Swal.fire({
             icon: 'success',
             title: 'Pagamento Confirmado!',
-            html: `O dinheiro fica retido com segurança até você confirmar o recebimento.<br><br>Os teus códigos de liberação:<br><b style="color:var(--primary)">${codigos.join('<br>')}</b><br><br>Eles também ficam salvos em "Meus Pedidos".`,
+            html: `O dinheiro fica retido com segurança até você confirmar o recebimento.<br><br>Os teus códigos de liberação:<br><b style="color:var(--primary)">${codigos.map(esc).join('<br>')}</b><br><br>Eles também ficam salvos em "Meus Pedidos".`,
             confirmButtonColor: '#00bf63',
             background: '#202024',
             color: '#e1e1e6'
@@ -449,54 +465,55 @@ async function carregarDashboard() {
         if(resTotal.ok) {
             const dataTotal = await resTotal.json();
             document.getElementById('dash-total').innerText = formatMoney(dataTotal.total_vendas_concluidas || 0);
+            // "Itens vendidos" vem do servidor (só conta vendas finalizadas).
+            // Antes isso era o nº de anúncios do usuário, o que mostrava
+            // "6 vendidos" com saldo R$ 0,00.
+            document.getElementById('dash-count').innerText = dataTotal.itens_vendidos ?? 0;
         }
 
         const resProjs = await fetch(`${API_BASE}/projetos/`);
         const todos = await resProjs.json();
-        const meus = todos.filter(p => p.vendedor_id == uid || p.cliente_id == uid);
-        
-        document.getElementById('dash-count').innerText = meus.filter(p => p.vendedor_id == uid).length;
+        // Esta aba é só do vendedor (anúncios e vendas). As compras ficam em
+        // "Minhas Compras", onde também está o botão de confirmar recebimento.
+        const meus = todos.filter(p => p.vendedor_id == uid);
 
         const tbody = document.getElementById('lista-vendas-table');
         tbody.innerHTML = "";
 
         if (meus.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" class="text-center" style="color:var(--text-muted)">Nenhuma transação.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center" style="color:var(--text-muted)">Você ainda não publicou nenhum anúncio.</td></tr>';
             return;
         }
 
+        const STATUS_VENDEDOR = {
+            aberto:               { texto: 'À venda',          cor: 'var(--text-muted)' },
+            aguardando_pagamento: { texto: 'Aguardando Pix',   cor: '#ffc107' },
+            pagamento_retido:     { texto: 'Pago (em escrow)', cor: '#ffc107' },
+            finalizado:           { texto: 'Vendido',          cor: 'var(--primary)' },
+            cancelado:            { texto: 'Cancelado',        cor: '#ff5555' },
+        };
+
         meus.forEach(p => {
-            let acao = "-";
-            let statusBadge = `<span class="status-badge status-info">${p.status}</span>`;
-
-            if (p.status === 'aguardando_pagamento') {
-                statusBadge = `<span class="status-badge status-pending" style="color:#ffc107">Aguardando Pix</span>`;
-            } else if (p.status === 'pagamento_retido') {
-                statusBadge = `<span class="status-badge status-pending" style="color:#ffc107">Pago (em escrow)</span>`;
-                if (p.cliente_id == uid) {
-                    acao = `<button onclick="liberarPagamento(${p.id})" style="color:var(--primary); font-weight:bold; background:none; border:none; cursor:pointer;">Liberar Pagamento</button>`;
-                }
-            } else if (p.status === 'finalizado') {
-                statusBadge = `<span class="status-badge status-success" style="color:var(--primary)">Concluído</span>`;
-            }
-
+            const st = STATUS_VENDEDOR[p.status] || { texto: p.status, cor: 'var(--text-muted)' };
             tbody.innerHTML += `
                 <tr>
-                    <td>${p.titulo}</td>
+                    <td>${esc(p.titulo)}</td>
                     <td style="font-weight:bold; color:var(--primary)">${formatMoney(p.valor)}</td>
-                    <td>${statusBadge}</td>
-                    <td>${acao}</td>
+                    <td><span class="status-badge" style="color:${st.cor}">${esc(st.texto)}</span></td>
                 </tr>`;
         });
-    } catch (e) {}
+    } catch (e) {
+        document.getElementById('lista-vendas-table').innerHTML =
+            '<tr><td colspan="3" class="text-center" style="color:#ff5555">Não foi possível carregar o painel. Tente novamente.</td></tr>';
+    }
 }
 
 async function liberarPagamento(id) {
     const { value: codigo } = await Swal.fire({
         title: 'Liberar Pagamento',
         input: 'text',
-        inputLabel: 'Digita o código recebido do vendedor/sistema',
-        inputPlaceholder: 'Código aqui...',
+        inputLabel: 'Digite o código de liberação do seu pedido',
+        inputPlaceholder: 'Código de 6 dígitos',
         showCancelButton: true,
         confirmButtonColor: '#00bf63',
         background: '#202024',
@@ -511,11 +528,26 @@ async function liberarPagamento(id) {
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify({ codigo: codigo })
         });
-        if (res.ok) { 
-            Swal.fire({title: 'Sucesso!', text: 'Pagamento liberado ao vendedor.', icon: 'success', background: '#202024', color: '#e1e1e6'}); 
-            carregarDashboard(); 
-        } else { 
-            Swal.fire({title: 'Erro', text: 'Código inválido.', icon: 'error', background: '#202024', color: '#e1e1e6'}); 
+        if (res.ok) {
+            const liberado = await res.json();
+            // O conteúdo comprado é o motivo da compra: mostramos aqui e ele
+            // também fica disponível depois em "Meus Pedidos".
+            Swal.fire({
+                title: 'Pagamento liberado!',
+                icon: 'success',
+                html: `<p style="margin-bottom:10px; color:var(--text-muted)">Aqui está o que você comprou:</p>
+                       <div class="conteudo-entregue">${esc(liberado.conteudo_digital)}</div>
+                       <p style="font-size:12px; color:var(--text-muted); margin-top:10px;">Você pode rever isso a qualquer momento em "Meus Pedidos".</p>`,
+                confirmButtonColor: '#00bf63',
+                background: '#202024',
+                color: '#e1e1e6'
+            });
+            // Atualiza as duas listas de pedidos (página e aba do painel).
+            carregarPedidos('grid-pedidos-page');
+            carregarPedidos('grid-meus-pedidos');
+        } else {
+            const err = await res.json().catch(() => ({}));
+            Swal.fire({title: 'Não foi possível liberar', text: msgErro(err, 'Tente novamente.'), icon: 'error', background: '#202024', color: '#e1e1e6'});
         }
     } catch (e) { Swal.fire({title: 'Erro', text: 'Falha na conexão.', icon: 'error', background: '#202024', color: '#e1e1e6'}); }
 }
@@ -526,7 +558,8 @@ async function publicarAnuncio() {
     const categoria = document.getElementById('anun-cat').value;
     const conteudo = document.getElementById('anun-conteudo').value;
 
-    if (!titulo || !valor || !conteudo) return Toast.fire({ icon: 'warning', title: 'Preenche tudo!' });
+    if (!titulo || !valor || !conteudo) return Toast.fire({ icon: 'warning', title: 'Preencha todos os campos' });
+    if (!(parseFloat(valor) > 0)) return Toast.fire({ icon: 'warning', title: 'O valor precisa ser maior que zero' });
 
     Swal.showLoading();
 
@@ -551,7 +584,7 @@ async function publicarAnuncio() {
             }).then(() => router('dashboard'));
         } else { 
             const err = await res.json();
-            Swal.fire({title: 'Erro', text: err.detail || 'Falha ao publicar', icon: 'error', background: '#202024', color: '#e1e1e6'}); 
+            Swal.fire({title: 'Não foi possível publicar', text: msgErro(err, 'Falha ao publicar'), icon: 'error', background: '#202024', color: '#e1e1e6'});
         }
     } catch (e) { Swal.fire({title: 'Erro', text: 'Conexão falhou', icon: 'error', background: '#202024', color: '#e1e1e6'}); }
 }
@@ -566,10 +599,13 @@ function switchDashTab(tab, evt) {
     // marcar o ícone como "ativo" em vez do botão.
     if (evt && evt.currentTarget) evt.currentTarget.classList.add('active');
 
-    if(tab === 'compras') carregarMinhasCompras();
+    if(tab === 'compras') carregarPedidos('grid-meus-pedidos');
 }
 
-async function carregarMeusPedidos() {
+// Carrega a lista de pedidos do comprador dentro do container informado.
+// Existem dois lugares que mostram a mesma lista: a página "Meus Pedidos"
+// (#grid-pedidos-page) e a aba "Minhas Compras" do painel (#grid-meus-pedidos).
+async function carregarPedidos(containerId = 'grid-pedidos-page') {
     const usuarioId = localStorage.getItem('usuario_id');
 
     if (!usuarioId) {
@@ -577,49 +613,57 @@ async function carregarMeusPedidos() {
         return;
     }
 
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '<div class="skeleton-card" style="height:160px"></div><div class="skeleton-card" style="height:160px"></div>';
+
     try {
         const response = await fetch(`${API_BASE}/usuarios/${usuarioId}/pedidos`, {
             method: 'GET',
             headers: authHeaders()
         });
 
-        if (response.ok) {
-            const pedidos = await response.json();
-            const container = document.getElementById('grid-meus-pedidos');
-            if(!container) return;
-            container.innerHTML = '';
+        if (!response.ok) {
+            container.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:50px; color:#ff5555;">Não foi possível carregar seus pedidos. Tente novamente.</div>';
+            return;
+        }
 
-            if (pedidos.length === 0) {
-                container.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:50px; color:var(--text-muted);">Ainda não efetuaste compras.</div>';
-                return;
+        const pedidos = await response.json();
+        container.innerHTML = '';
+
+        if (pedidos.length === 0) {
+            container.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:50px; color:var(--text-muted);">Você ainda não fez nenhuma compra.</div>';
+            return;
+        }
+
+        pedidos.forEach(pedido => {
+            let detalhe;
+            if (pedido.status === 'aguardando_pagamento') {
+                detalhe = `<p class="pedido-status" style="color:#ffc107;">⏳ Aguardando confirmação do Pix</p>`;
+            } else if (pedido.status === 'pagamento_retido') {
+                detalhe = `
+                    <p class="pedido-status" style="color:#ffc107;">🔑 Código de liberação: <strong style="font-size:16px">${esc(pedido.codigo_verificacao)}</strong></p>
+                    <button class="btn-liberar" onclick="liberarPagamento(${Number(pedido.id)})">
+                        <i class="fas fa-check"></i> Confirmar recebimento
+                    </button>`;
+            } else if (pedido.status === 'finalizado') {
+                detalhe = `
+                    <p class="pedido-status" style="color:var(--primary);">✅ Transação finalizada</p>
+                    <div class="conteudo-entregue">${esc(pedido.conteudo_digital)}</div>`;
+            } else {
+                detalhe = `<p class="pedido-status" style="color:var(--text-muted);">${esc(pedido.status)}</p>`;
             }
 
-            pedidos.forEach(pedido => {
-                let infoCodigo;
-                if (pedido.status === 'aguardando_pagamento') {
-                    infoCodigo = `<p style="color: #ffc107; font-size: 13px; margin-top: 10px;">⏳ Aguardando confirmação do Pix</p>`;
-                } else if (pedido.status === 'pagamento_retido') {
-                    infoCodigo = `<p style="color: #ffc107; font-size: 13px; margin-top: 10px;">🔑 Código Escrow: <strong style="font-size:16px">${pedido.codigo_verificacao}</strong></p>`;
-                } else {
-                    infoCodigo = `<p style="color: var(--primary); font-size: 13px; margin-top: 10px;">✅ Transação Finalizada</p>`;
-                }
-
-                container.innerHTML += `
-                    <div class="product-card fade-in">
-                        <div class="prod-info">
-                            <h3>${pedido.titulo}</h3>
-                            <span class="prod-price" style="font-size:20px">${formatMoney(pedido.valor)}</span>
-                            ${infoCodigo}
-                        </div>
+            container.innerHTML += `
+                <div class="product-card fade-in">
+                    <div class="prod-info">
+                        <h3>${esc(pedido.titulo)}</h3>
+                        <span class="prod-price" style="font-size:20px">${formatMoney(pedido.valor)}</span>
+                        ${detalhe}
                     </div>
-                `;
-            });
-        }
+                </div>`;
+        });
     } catch (error) {
-        console.error("Erro de conexão:", error);
+        container.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:50px; color:#ff5555;">Erro de conexão. Tente novamente.</div>';
     }
-}
-
-async function carregarMinhasCompras() {
-    carregarMeusPedidos(); 
 }

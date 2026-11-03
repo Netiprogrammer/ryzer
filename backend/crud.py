@@ -1,18 +1,22 @@
 import base64
-import random
 import secrets
 import uuid
 from io import BytesIO
 
 import qrcode
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend import models, schemas, security
 
 # USUÁRIOS
 def get_usuario_by_email(db: Session, email: str):
-    return db.query(models.Usuario).filter(models.Usuario.email == email).first()
+    # Comparação sem diferenciar maiúsculas/minúsculas: contas antigas que
+    # foram salvas com letras maiúsculas continuam achando o login, e novas
+    # contas não conseguem duplicar o mesmo e-mail só mudando a caixa.
+    return db.query(models.Usuario).filter(
+        func.lower(models.Usuario.email) == email.strip().lower()
+    ).first()
 
 def get_usuario_by_id(db: Session, usuario_id: int):
     return db.query(models.Usuario).filter(models.Usuario.id == usuario_id).first()
@@ -120,7 +124,9 @@ def confirmar_pagamento_pix(db: Session, projeto_id: int, cliente_id: int):
 
     projeto.status = models.StatusProjeto.PAGAMENTO_RETIDO
     projeto.valor_no_escrow = projeto.valor
-    projeto.codigo_verificacao = str(random.randint(100000, 999999))
+    # secrets (e não random): o código é um segredo, então precisa vir de um
+    # gerador criptograficamente seguro, não de um previsível.
+    projeto.codigo_verificacao = f"{secrets.randbelow(900000) + 100000}"
     db.commit()
     db.refresh(projeto)
     return projeto
@@ -131,7 +137,13 @@ def validar_entrega_e_liberar(db: Session, projeto_id: int, codigo: str):
 
     if (
         projeto
-        and projeto.codigo_verificacao == codigo
+        and projeto.codigo_verificacao
+        # compare_digest: comparação em tempo constante (não vaza, pelo
+        # tempo de resposta, quantos caracteres do código estavam certos).
+        # (em bytes: compare_digest recusa texto com caracteres não-ASCII)
+        and secrets.compare_digest(
+            projeto.codigo_verificacao.encode("utf-8"), codigo.strip().encode("utf-8")
+        )
         and projeto.status == models.StatusProjeto.PAGAMENTO_RETIDO
     ):
         projeto.status = models.StatusProjeto.FINALIZADO
@@ -151,8 +163,9 @@ def contar_vendas_vendedor(db: Session, vendedor_id: int):
     ).count()
 
 def somar_vendas_vendedor(db: Session, vendedor_id: int) -> float:
-    projetos = db.query(models.Projeto).filter(
+    # SUM feito no banco (em vez de carregar todas as linhas pro Python).
+    total = db.query(func.coalesce(func.sum(models.Projeto.valor), 0.0)).filter(
         models.Projeto.vendedor_id == vendedor_id,
         models.Projeto.status == models.StatusProjeto.FINALIZADO
-    ).all()
-    return sum(p.valor for p in projetos)
+    ).scalar()
+    return float(total or 0.0)
