@@ -8,7 +8,8 @@ from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pathlib import Path
-from typing import List
+from typing import List, Literal, Optional
+from fastapi import Query
 
 from backend import crud, database, models, schemas, security
 from backend.database import engine, Base, get_db
@@ -52,7 +53,7 @@ app = FastAPI(title="Ryzer Marketplace", lifespan=lifespan)
 # uma mensagem legível em português, sem repetir a entrada do usuário.
 _NOMES_CAMPOS = {
     "titulo": "Título", "valor": "Valor", "categoria": "Categoria",
-    "conteudo_digital": "Conteúdo a entregar", "nome": "Nome",
+    "conteudo_digital": "Conteúdo a entregar", "preco_min": "Preço mínimo", "preco_max": "Preço máximo", "pagina": "Página", "por_pagina": "Itens por página", "ordem": "Ordenação", "q": "Busca", "nome": "Nome",
     "email": "E-mail", "senha": "Senha", "codigo": "Código",
 }
 
@@ -174,6 +175,36 @@ def criar_anuncio(
 @app.get("/projetos/", response_model=List[schemas.Projeto], tags=["Projetos"])
 def listar_anuncios(db: Session = Depends(get_db)):
     return crud.get_projetos(db)
+
+@app.get("/projetos/busca", response_model=schemas.ResultadoBusca, tags=["Projetos"])
+def buscar_anuncios(
+    q: Optional[str] = Query(None, max_length=80),
+    categoria: Optional[schemas.Categoria] = None,
+    preco_min: Optional[float] = Query(None, ge=0, le=schemas.VALOR_MAX, allow_inf_nan=False),
+    preco_max: Optional[float] = Query(None, ge=0, le=schemas.VALOR_MAX, allow_inf_nan=False),
+    ordem: Literal["recentes", "menor_preco", "maior_preco", "titulo"] = "recentes",
+    pagina: int = Query(1, ge=1, le=10_000),
+    por_pagina: int = Query(12),
+    db: Session = Depends(get_db),
+):
+    """Vitrine pública com busca, filtros, ordenação e paginação."""
+    if por_pagina not in (12, 24, 48):
+        raise HTTPException(status_code=422, detail="Itens por página: use 12, 24 ou 48.")
+    if preco_min is not None and preco_max is not None and preco_min > preco_max:
+        raise HTTPException(status_code=422, detail="O preço mínimo não pode ser maior que o máximo.")
+    return crud.buscar_projetos(
+        db, q=q, categoria=categoria, preco_min=preco_min, preco_max=preco_max,
+        ordem=ordem, pagina=pagina, por_pagina=por_pagina,
+    )
+
+@app.get("/projetos/por-ids", response_model=List[schemas.ProjetoVitrine], tags=["Projetos"])
+def anuncios_por_ids(ids: str = Query("", max_length=400), db: Session = Depends(get_db)):
+    """Carrinho: devolve os anúncios ainda abertos entre os ids informados (ex.: ?ids=1,2,3)."""
+    try:
+        lista = [int(i) for i in ids.split(",") if i.strip()][:50]
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Ids inválidos.")
+    return crud.get_vitrine_por_ids(db, lista)
 
 @app.post("/projetos/{projeto_id}/checkout/pix/", response_model=schemas.PixCobranca, tags=["Escrow / Pix"])
 def iniciar_checkout_pix(

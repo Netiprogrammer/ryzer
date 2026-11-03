@@ -27,11 +27,11 @@
             <button class="drawer-close" aria-label="Fechar menu" onclick="toggleMenu()"><i class="fas fa-times"></i></button>
         </div>
         <nav class="drawer-nav" aria-label="Categorias e conta">
-            <button onclick="router('loja'); mostrarTodasCategorias(); toggleMenu();"><i class="fas fa-home"></i> Início</button>
-            <button onclick="filtrarCategoria('hardware', null); toggleMenu();">Hardware</button>
-            <button onclick="filtrarCategoria('perifericos', null); toggleMenu();">Periféricos</button>
-            <button onclick="filtrarCategoria('computadores', null); toggleMenu();">Computadores</button>
-            <button onclick="filtrarCategoria('software', null); toggleMenu();">Cursos & Soft</button>
+            <button onclick="limparFiltros(); toggleMenu();"><i class="fas fa-home"></i> Início</button>
+            <button onclick="filtrarCategoria('hardware'); toggleMenu();">Hardware</button>
+            <button onclick="filtrarCategoria('perifericos'); toggleMenu();">Periféricos</button>
+            <button onclick="filtrarCategoria('computadores'); toggleMenu();">Computadores</button>
+            <button onclick="filtrarCategoria('software'); toggleMenu();">Cursos & Soft</button>
             <hr>
             <button onclick="router('dashboard'); toggleMenu();"><i class="fas fa-user-circle"></i> Minha Conta</button>
             <button onclick="router('meus-pedidos'); toggleMenu();"><i class="fas fa-box"></i> Meus Pedidos</button>
@@ -95,11 +95,11 @@
 
         <nav class="category-bar" aria-label="Navegação principal">
             <ul class="container category-content" style="padding: 0; margin: 0; display: flex; list-style: none;">
-                <li><button class="cat-link active" onclick="router('loja'); mostrarTodasCategorias(event);"><i class="fas fa-home"></i> Início</button></li>
-                <li><button class="cat-link" onclick="filtrarCategoria('hardware', event)">Hardware</button></li>
-                <li><button class="cat-link" onclick="filtrarCategoria('perifericos', event)">Periféricos</button></li>
-                <li><button class="cat-link" onclick="filtrarCategoria('computadores', event)">Computadores</button></li>
-                <li><button class="cat-link" onclick="filtrarCategoria('software', event)">Cursos & Soft</button></li>
+                <li><button class="cat-link active" data-cat="" onclick="limparFiltros()"><i class="fas fa-home"></i> Início</button></li>
+                <li><button class="cat-link" data-cat="hardware" onclick="filtrarCategoria('hardware')">Hardware</button></li>
+                <li><button class="cat-link" data-cat="perifericos" onclick="filtrarCategoria('perifericos')">Periféricos</button></li>
+                <li><button class="cat-link" data-cat="computadores" onclick="filtrarCategoria('computadores')">Computadores</button></li>
+                <li><button class="cat-link" data-cat="software" onclick="filtrarCategoria('software')">Cursos & Soft</button></li>
                 <li style="margin-left: auto;"><button class="cat-link highlight" onclick="router('anunciar')">QUERO VENDER</button></li>
             </ul>
         </nav>
@@ -179,23 +179,64 @@
                 </div>
             </article>
 
-            <header class="section-header">
-                <h2><i class="fas fa-fire" style="color:#ff6500"></i> Ofertas em Destaque</h2>
-                <div class="filters">
-                    <label for="ordenar-produtos">Ordenar por:</label>
-                    <select id="ordenar-produtos" onchange="ordenarProdutos(this.value)">
-                        <option value="relevancia">Relevância</option>
-                        <option value="menor_preco">Menor Preço</option>
-                        <option value="maior_preco">Maior Preço</option>
-                    </select>
-                </div>
-            </header>
+            <nav class="breadcrumbs" aria-label="Você está em" id="loja-breadcrumb">
+                <span onclick="limparFiltros()">Início</span>
+            </nav>
 
-            <div id="grid-produtos" class="product-grid">
-                <div class="skeleton-card"></div>
-                <div class="skeleton-card"></div>
-                <div class="skeleton-card"></div>
-                <div class="skeleton-card"></div>
+            <div class="loja-layout">
+                <button class="btn-filtros-mobile" id="btn-filtros-mobile" onclick="toggleFiltros()" aria-expanded="false" aria-controls="filtros-painel">
+                    <i class="fas fa-sliders"></i> Filtros <span id="filtros-badge" class="hidden"></span>
+                </button>
+
+                <aside class="filtros-painel" id="filtros-painel" aria-label="Filtros">
+                    <div class="filtro-grupo">
+                        <h3>Categorias</h3>
+                        <ul id="filtro-categorias" class="filtro-lista"></ul>
+                    </div>
+                    <div class="filtro-grupo">
+                        <h3>Preço</h3>
+                        <form class="filtro-preco" onsubmit="aplicarPreco(event)">
+                            <input type="number" id="preco-min" placeholder="Mín." min="0" step="0.01" inputmode="decimal" aria-label="Preço mínimo">
+                            <span>até</span>
+                            <input type="number" id="preco-max" placeholder="Máx." min="0" step="0.01" inputmode="decimal" aria-label="Preço máximo">
+                            <button type="submit" aria-label="Aplicar faixa de preço"><i class="fas fa-check"></i></button>
+                        </form>
+                    </div>
+                    <button class="btn-limpar" onclick="limparFiltros()"><i class="fas fa-rotate-left"></i> Limpar filtros</button>
+                </aside>
+
+                <div class="loja-conteudo">
+                    <header class="section-header">
+                        <h2 id="loja-titulo">Todos os anúncios</h2>
+                        <div class="filters">
+                            <label for="ordenar-produtos">Ordenar:</label>
+                            <select id="ordenar-produtos" onchange="mudarOrdem(this.value)">
+                                <option value="recentes">Mais recentes</option>
+                                <option value="menor_preco">Menor preço</option>
+                                <option value="maior_preco">Maior preço</option>
+                                <option value="titulo">Nome (A–Z)</option>
+                            </select>
+                            <label for="por-pagina">Exibir:</label>
+                            <select id="por-pagina" onchange="mudarPorPagina(this.value)">
+                                <option value="12">12</option>
+                                <option value="24">24</option>
+                                <option value="48">48</option>
+                            </select>
+                        </div>
+                    </header>
+
+                    <p id="loja-resumo" class="loja-resumo" aria-live="polite"></p>
+                    <div id="filtros-ativos" class="filtros-ativos"></div>
+
+                    <div id="grid-produtos" class="product-grid">
+                        <div class="skeleton-card"></div>
+                        <div class="skeleton-card"></div>
+                        <div class="skeleton-card"></div>
+                        <div class="skeleton-card"></div>
+                    </div>
+
+                    <nav id="paginacao" class="paginacao" aria-label="Paginação"></nav>
+                </div>
             </div>
         </section>
 

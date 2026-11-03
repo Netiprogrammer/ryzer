@@ -182,3 +182,30 @@ class ValidarCodigo(BaseModel):
     enviar exatamente um campo chamado 'codigo' com os 6 dígitos.
     """
     codigo: str = Field(min_length=1, max_length=32)
+
+# --- VITRINE PÚBLICA -------------------------------------------------------
+# O que qualquer visitante pode ver de um anúncio aberto. De propósito não
+# inclui cliente_id, conteúdo digital nem código (nada de dado privado).
+class ProjetoVitrine(BaseModel):
+    id: int
+    titulo: str
+    valor: float
+    categoria: str
+    vendedor_id: int
+    vendedor_nome: str
+    data_criacao: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ResultadoBusca(BaseModel):
+    itens: List[ProjetoVitrine]
+    total: int
+    pagina: int
+    paginas: int
+    por_pagina: int
+    # Contagem por categoria (respeita busca e faixa de preço, mas não o filtro
+    # de categoria) — alimenta os números ao lado de cada filtro.
+    categorias: dict[str, int]
+    preco_min: Optional[float] = None
+    preco_max: Optional[float] = None

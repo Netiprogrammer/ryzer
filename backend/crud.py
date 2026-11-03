@@ -5,7 +5,7 @@ from io import BytesIO
 
 import qrcode
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from backend import models, schemas, security
 
@@ -56,6 +56,94 @@ def create_projeto(db: Session, projeto: schemas.ProjetoCreate, vendedor_id: int
 
 def get_projetos(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.Projeto).offset(skip).limit(limit).all()
+
+ORDENS_BUSCA = ("recentes", "menor_preco", "maior_preco", "titulo")
+
+
+def _escapar_like(termo: str) -> str:
+    return termo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def buscar_projetos(
+    db: Session,
+    q: str | None = None,
+    categoria: str | None = None,
+    preco_min: float | None = None,
+    preco_max: float | None = None,
+    ordem: str = "recentes",
+    pagina: int = 1,
+    por_pagina: int = 12,
+) -> dict:
+    """
+    Vitrine pública: só anúncios ABERTOS, com busca por texto, filtro de
+    categoria e faixa de preço, ordenação e paginação — tudo feito no banco.
+    """
+    P = models.Projeto
+    base = db.query(P).filter(P.status == models.StatusProjeto.ABERTO)
+    if q and q.strip():
+        base = base.filter(P.titulo.ilike(f"%{_escapar_like(q.strip())}%", escape="\\"))
+    if preco_min is not None:
+        base = base.filter(P.valor >= preco_min)
+    if preco_max is not None:
+        base = base.filter(P.valor <= preco_max)
+
+    # Contagem por categoria ignora o filtro de categoria (como os filtros
+    # de loja: você vê quantos itens existiriam se trocasse de categoria).
+    contagem = dict(
+        base.with_entities(P.categoria, func.count(P.id)).group_by(P.categoria).all()
+    )
+
+    consulta = base.filter(P.categoria == categoria) if categoria else base
+    total = consulta.count()
+    faixa = consulta.with_entities(func.min(P.valor), func.max(P.valor)).one()
+
+    ordenacao = {
+        "menor_preco": (P.valor.asc(), P.id.desc()),
+        "maior_preco": (P.valor.desc(), P.id.desc()),
+        "titulo": (func.lower(P.titulo).asc(), P.id.desc()),
+    }.get(ordem, (P.id.desc(),))
+    paginas = max(1, -(-total // por_pagina))
+    pagina = min(max(1, pagina), paginas)
+    itens = (
+        consulta.options(joinedload(P.vendedor))
+        .order_by(*ordenacao)
+        .offset((pagina - 1) * por_pagina)
+        .limit(por_pagina)
+        .all()
+    )
+    return {
+        "itens": [
+            schemas.ProjetoVitrine(
+                id=p.id, titulo=p.titulo, valor=p.valor, categoria=p.categoria,
+                vendedor_id=p.vendedor_id, vendedor_nome=p.vendedor.nome,
+                data_criacao=p.data_criacao,
+            )
+            for p in itens
+        ],
+        "total": total, "pagina": pagina, "paginas": paginas, "por_pagina": por_pagina,
+        "categorias": contagem,
+        "preco_min": faixa[0], "preco_max": faixa[1],
+    }
+
+
+def get_vitrine_por_ids(db: Session, ids: list[int]):
+    """Anúncios abertos pelos ids (usado pelo carrinho)."""
+    P = models.Projeto
+    if not ids:
+        return []
+    projetos = (
+        db.query(P).options(joinedload(P.vendedor))
+        .filter(P.id.in_(ids), P.status == models.StatusProjeto.ABERTO).all()
+    )
+    return [
+        schemas.ProjetoVitrine(
+            id=p.id, titulo=p.titulo, valor=p.valor, categoria=p.categoria,
+            vendedor_id=p.vendedor_id, vendedor_nome=p.vendedor.nome,
+            data_criacao=p.data_criacao,
+        )
+        for p in projetos
+    ]
+
 
 def get_projeto_by_id(db: Session, projeto_id: int):
     return db.query(models.Projeto).filter(models.Projeto.id == projeto_id).first()

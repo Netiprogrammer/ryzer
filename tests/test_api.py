@@ -364,3 +364,109 @@ def test_total_de_vendas_soma_apenas_finalizados(client):
 
     res = client.get(f"/vendedor/{uid_vendedor}/total-vendas", headers=auth_header(token_vendedor))
     assert res.json() == {"total_vendas_concluidas": 250.0, "itens_vendidos": 1}
+
+
+# --- BUSCA / FILTROS / PAGINAÇÃO DA VITRINE ---------------------------------
+
+def _publicar(client, token, titulo, valor, categoria="geral"):
+    res = client.post("/projetos/", json={
+        "titulo": titulo, "valor": valor, "categoria": categoria,
+        "conteudo_digital": "conteudo secreto",
+    }, headers=auth_header(token))
+    assert res.status_code == 200, res.text
+    return res.json()["id"]
+
+
+def _vitrine_de_teste(client):
+    _, token = cadastrar_e_logar(client, nome="Loja Busca", email="vend-busca@x.com")
+    ids = {
+        "ssd": _publicar(client, token, "SSD NVMe 1TB", 400, "hardware"),
+        "ram": _publicar(client, token, "Memória RAM 16GB", 250, "hardware"),
+        "mouse": _publicar(client, token, "Mouse Gamer", 120, "perifericos"),
+        "curso": _publicar(client, token, "Curso de 100% Python_", 80, "software"),
+    }
+    return token, ids
+
+
+def test_busca_sem_filtros_traz_tudo_com_nome_do_vendedor(client):
+    _vitrine_de_teste(client)
+    body = client.get("/projetos/busca").json()
+    assert body["total"] == 4 and body["pagina"] == 1 and body["paginas"] == 1
+    assert {i["vendedor_nome"] for i in body["itens"]} == {"Loja Busca"}
+    assert body["categorias"] == {"hardware": 2, "perifericos": 1, "software": 1}
+    assert body["preco_min"] == 80 and body["preco_max"] == 400
+    # nada privado na vitrine
+    for item in body["itens"]:
+        assert "cliente_id" not in item and "conteudo_digital" not in item
+        assert "codigo_verificacao" not in item
+
+
+def test_busca_por_texto_categoria_e_preco(client):
+    _vitrine_de_teste(client)
+    assert [i["titulo"] for i in client.get("/projetos/busca", params={"q": "mouse"}).json()["itens"]] == ["Mouse Gamer"]
+    hw = client.get("/projetos/busca", params={"categoria": "hardware"}).json()
+    assert hw["total"] == 2
+    # contagem por categoria ignora o filtro de categoria
+    assert hw["categorias"]["perifericos"] == 1
+    faixa = client.get("/projetos/busca", params={"preco_min": 100, "preco_max": 300}).json()
+    assert sorted(i["valor"] for i in faixa["itens"]) == [120, 250]
+
+
+def test_busca_trata_percent_e_underscore_como_texto_literal(client):
+    _vitrine_de_teste(client)
+    assert client.get("/projetos/busca", params={"q": "100%"}).json()["total"] == 1
+    assert client.get("/projetos/busca", params={"q": "python_"}).json()["total"] == 1
+    assert client.get("/projetos/busca", params={"q": "%"}).json()["total"] == 1  # só o título com '%'
+
+
+def test_busca_ordenacao(client):
+    _vitrine_de_teste(client)
+    def valores(ordem):
+        return [i["valor"] for i in client.get("/projetos/busca", params={"ordem": ordem}).json()["itens"]]
+    assert valores("menor_preco") == [80, 120, 250, 400]
+    assert valores("maior_preco") == [400, 250, 120, 80]
+    titulos = [i["titulo"] for i in client.get("/projetos/busca", params={"ordem": "titulo"}).json()["itens"]]
+    assert titulos == sorted(titulos, key=str.lower)
+    ids = [i["id"] for i in client.get("/projetos/busca", params={"ordem": "recentes"}).json()["itens"]]
+    assert ids == sorted(ids, reverse=True)
+
+
+def test_busca_paginacao(client):
+    _, token = cadastrar_e_logar(client, email="vend-pag@x.com")
+    for n in range(13):
+        _publicar(client, token, f"Item {n:02d}", 10 + n)
+    p1 = client.get("/projetos/busca", params={"ordem": "menor_preco"}).json()
+    assert (p1["total"], p1["paginas"], len(p1["itens"])) == (13, 2, 12)
+    p2 = client.get("/projetos/busca", params={"ordem": "menor_preco", "pagina": 2}).json()
+    assert len(p2["itens"]) == 1 and p2["itens"][0]["valor"] == 22
+    # página além do fim cai na última, não dá erro
+    assert client.get("/projetos/busca", params={"pagina": 99}).json()["pagina"] == 2
+
+
+def test_busca_so_mostra_anuncios_abertos(client):
+    token, ids = _vitrine_de_teste(client)
+    _, comprador = cadastrar_e_logar(client, email="comp-busca@x.com")
+    assert client.post(f"/projetos/{ids['mouse']}/checkout/pix/", headers=auth_header(comprador)).status_code == 200
+    body = client.get("/projetos/busca").json()
+    assert body["total"] == 3 and ids["mouse"] not in [i["id"] for i in body["itens"]]
+    assert "perifericos" not in body["categorias"]
+
+
+@pytest.mark.parametrize("params", [
+    {"ordem": "aleatoria"}, {"por_pagina": 7}, {"pagina": 0}, {"preco_min": -1},
+    {"preco_max": "NaN"}, {"preco_min": 50, "preco_max": 10}, {"por_pagina": "abc"}, {"preco_min": "inf"}, {"categoria": "armas"}, {"q": "x" * 81},
+])
+def test_busca_rejeita_parametros_invalidos(client, params):
+    res = client.get("/projetos/busca", params=params)
+    assert res.status_code == 422 and isinstance(res.json()["detail"], str)
+
+
+def test_por_ids_devolve_so_abertos_e_valida_entrada(client):
+    token, ids = _vitrine_de_teste(client)
+    _, comprador = cadastrar_e_logar(client, email="comp-ids@x.com")
+    client.post(f"/projetos/{ids['mouse']}/checkout/pix/", headers=auth_header(comprador))
+    query = f"{ids['ssd']},{ids['mouse']},9999"
+    res = client.get("/projetos/por-ids", params={"ids": query})
+    assert [i["id"] for i in res.json()] == [ids["ssd"]]
+    assert client.get("/projetos/por-ids", params={"ids": ""}).json() == []
+    assert client.get("/projetos/por-ids", params={"ids": "a,b"}).status_code == 422

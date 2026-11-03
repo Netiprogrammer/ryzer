@@ -185,96 +185,228 @@ function logout() {
     });
 }
 
-let produtosCache = [];
-let categoriaAtual = 'todas';
-let ordenacaoAtual = 'relevancia';
+// --- VITRINE: busca, filtros, ordenação e paginação (feitos no servidor) ---
+const CATEGORIA_NOME = {
+    hardware: 'Hardware', perifericos: 'Periféricos', computadores: 'Computadores',
+    software: 'Cursos & Soft', geral: 'Geral',
+};
+const ORDEM_PADRAO = 'recentes';
+
+let produtosPorId = {};   // anúncios já vistos (detalhe do produto usa isso)
+let estadoLoja = { q: '', categoria: '', precoMin: '', precoMax: '', ordem: ORDEM_PADRAO, porPagina: 12, pagina: 1 };
+let ultimaBusca = 0;      // descarta respostas antigas se o usuário filtrar rápido
+
+function paramsLoja() {
+    const e = estadoLoja, p = new URLSearchParams();
+    if (e.q) p.set('q', e.q);
+    if (e.categoria) p.set('categoria', e.categoria);
+    if (e.precoMin !== '') p.set('preco_min', e.precoMin);
+    if (e.precoMax !== '') p.set('preco_max', e.precoMax);
+    p.set('ordem', e.ordem);
+    p.set('por_pagina', e.porPagina);
+    p.set('pagina', e.pagina);
+    return p;
+}
 
 async function carregarLoja() {
     const grid = document.getElementById('grid-produtos');
-    grid.innerHTML = '<div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div>';
+    const minha = ++ultimaBusca;
+    grid.innerHTML = '<div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div>';
 
     try {
-        const res = await fetch(`${API_BASE}/projetos/`);
+        const res = await fetch(`${API_BASE}/projetos/busca?${paramsLoja()}`);
         const data = await res.json();
-        produtosCache = data.filter(p => p.status === 'aberto');
-        renderGrid(produtosCache);
+        if (minha !== ultimaBusca) return;
+        if (!res.ok) throw new Error(msgErro(data, 'Erro ao buscar anúncios.'));
+        data.itens.forEach(p => { produtosPorId[p.id] = p; });
+        estadoLoja.pagina = data.pagina;
+        renderLoja(data);
     } catch (e) {
-        grid.innerHTML = '<p class="text-center">Erro ao carregar loja.</p>';
+        if (minha !== ultimaBusca) return;
+        grid.innerHTML = '<p class="loja-vazio">Não foi possível carregar a loja. Tente novamente em instantes.</p>';
+        document.getElementById('paginacao').innerHTML = '';
     }
+}
+
+function renderLoja(data) {
+    renderFiltros(data);
+    renderGrid(data.itens);
+    renderPaginacao(data);
+
+    const e = estadoLoja;
+    const nomeCat = e.categoria ? CATEGORIA_NOME[e.categoria] : 'Todos os anúncios';
+    document.getElementById('loja-titulo').innerText = e.q ? `Resultados para “${e.q}”` : nomeCat;
+    document.getElementById('loja-resumo').innerText =
+        data.total === 0 ? '' : `${data.total} ${data.total === 1 ? 'anúncio encontrado' : 'anúncios encontrados'}`;
+    document.getElementById('ordenar-produtos').value = e.ordem;
+    document.getElementById('por-pagina').value = String(e.porPagina);
+    document.getElementById('campo-busca').value = e.q;
+
+    const bc = document.getElementById('loja-breadcrumb');
+    bc.innerHTML = `<span onclick="limparFiltros()">Início</span>` +
+        (e.categoria ? ` &gt; <span>${esc(CATEGORIA_NOME[e.categoria])}</span>` : '') +
+        (e.q ? ` &gt; <span>Busca</span>` : '');
+    sincronizarBarraCategorias();
+
+    // O banner só aparece na vitrine "limpa"; ao filtrar/buscar, a lista sobe pro topo.
+    const filtrando = e.q || e.categoria || e.precoMin !== '' || e.precoMax !== '' || e.pagina > 1;
+    document.querySelector('#sec-loja .hero-banner').classList.toggle('hidden', !!filtrando);
+}
+
+function renderFiltros(data) {
+    const e = estadoLoja;
+    const totalGeral = Object.values(data.categorias).reduce((a, b) => a + b, 0);
+    const itens = [{ cat: '', nome: 'Todas', n: totalGeral }].concat(
+        Object.keys(CATEGORIA_NOME).filter(c => c !== 'geral' || data.categorias.geral)
+            .map(c => ({ cat: c, nome: CATEGORIA_NOME[c], n: data.categorias[c] || 0 }))
+    );
+    document.getElementById('filtro-categorias').innerHTML = itens.map(i => `
+        <li><button class="filtro-item ${e.categoria === i.cat ? 'ativo' : ''}" ${i.n === 0 && e.categoria !== i.cat ? 'disabled' : ''}
+            onclick="filtrarCategoria('${i.cat}')" aria-pressed="${e.categoria === i.cat}">
+            <span>${esc(i.nome)}</span><small>${i.n}</small></button></li>`).join('');
+
+    document.getElementById('preco-min').value = e.precoMin;
+    document.getElementById('preco-max').value = e.precoMax;
+    // Dica da faixa real de preços (no tooltip, pra não apertar o campo).
+    const dica = data.preco_min != null ? `Preços nesta lista: ${formatMoney(data.preco_min)} a ${formatMoney(data.preco_max)}` : '';
+    document.getElementById('preco-min').title = dica;
+    document.getElementById('preco-max').title = dica;
+
+    // Chips dos filtros ativos (cada um remove só o seu filtro).
+    const chips = [];
+    if (e.q) chips.push(['q', `Busca: ${e.q}`]);
+    if (e.categoria) chips.push(['categoria', CATEGORIA_NOME[e.categoria]]);
+    if (e.precoMin !== '' || e.precoMax !== '') {
+        const de = e.precoMin !== '' ? formatMoney(Number(e.precoMin)) : 'R$ 0';
+        chips.push(['preco', e.precoMax !== '' ? `${de} – ${formatMoney(Number(e.precoMax))}` : `a partir de ${de}`]);
+    }
+    document.getElementById('filtros-ativos').innerHTML = chips.map(([k, t]) =>
+        `<button class="chip" onclick="removerFiltro('${k}')" aria-label="Remover filtro ${esc(t)}">${esc(t)} <i class="fas fa-xmark" aria-hidden="true"></i></button>`).join('');
+
+    const badge = document.getElementById('filtros-badge');
+    badge.innerText = chips.length;
+    badge.classList.toggle('hidden', chips.length === 0);
 }
 
 function renderGrid(lista) {
     const grid = document.getElementById('grid-produtos');
-    const termo = document.getElementById('campo-busca').value.toLowerCase();
-    grid.innerHTML = "";
+    const uid = Number(localStorage.getItem('usuario_id'));
 
-    let filtrados = lista.filter(p => p.titulo.toLowerCase().includes(termo));
-
-    if (categoriaAtual !== 'todas') {
-        filtrados = filtrados.filter(p => p.categoria === categoriaAtual);
-    }
-
-    if (ordenacaoAtual === 'menor_preco') {
-        filtrados = [...filtrados].sort((a, b) => a.valor - b.valor);
-    } else if (ordenacaoAtual === 'maior_preco') {
-        filtrados = [...filtrados].sort((a, b) => b.valor - a.valor);
-    }
-
-    if (filtrados.length === 0) {
-        grid.innerHTML = `<div style="grid-column:1/-1; text-align:center; padding:50px; color:var(--text-muted);">Nenhum produto encontrado.</div>`;
+    if (lista.length === 0) {
+        const filtrando = estadoLoja.q || estadoLoja.categoria || estadoLoja.precoMin !== '' || estadoLoja.precoMax !== '';
+        grid.innerHTML = `<div class="loja-vazio"><i class="fas fa-magnifying-glass" aria-hidden="true"></i>
+            <p>${filtrando ? 'Nenhum anúncio encontrado com esses filtros.' : 'Ainda não há anúncios disponíveis.'}</p>
+            ${filtrando ? '<button class="btn-limpar" onclick="limparFiltros()">Limpar filtros</button>' : ''}</div>`;
         return;
     }
 
-    filtrados.forEach(p => {
-        grid.innerHTML += `
+    grid.innerHTML = lista.map(p => {
+        const meu = p.vendedor_id === uid;
+        return `
             <div class="product-card fade-in">
                 <div class="prod-img-box" onclick="verDetalhes(${p.id})" style="cursor: pointer;">
                     ${getImagemProduto(p.categoria)}
                 </div>
                 <div class="prod-info">
+                    <span class="prod-cat">${esc(CATEGORIA_NOME[p.categoria] || 'Geral')}</span>
                     <h3 title="${esc(p.titulo)}">${esc(p.titulo)}</h3>
+                    <span class="prod-seller">Vendido por ${esc(p.vendedor_nome)}</span>
                     <span class="prod-price">${formatMoney(p.valor)}</span>
                     <span class="payment-info">Pix simulado — pagamento retido em escrow</span>
                 </div>
-                <button onclick="addCart(${p.id})" class="btn-cart btn-buy-large">
-                    <i class="fas fa-cart-plus"></i> COMPRAR
-                </button>
+                ${meu
+                    ? '<button class="btn-cart btn-buy-large" disabled><i class="fas fa-store"></i> SEU ANÚNCIO</button>'
+                    : `<button onclick="addCart(${p.id})" class="btn-cart btn-buy-large"><i class="fas fa-cart-plus"></i> COMPRAR</button>`}
             </div>`;
+    }).join('');
+}
+
+function renderPaginacao(data) {
+    const nav = document.getElementById('paginacao');
+    if (data.paginas <= 1) { nav.innerHTML = ''; return; }
+    const { pagina, paginas } = data;
+    const nums = new Set([1, paginas, pagina - 1, pagina, pagina + 1]);
+    let html = `<button onclick="irParaPagina(${pagina - 1})" ${pagina === 1 ? 'disabled' : ''} aria-label="Página anterior"><i class="fas fa-chevron-left"></i></button>`;
+    let anterior = 0;
+    [...nums].filter(n => n >= 1 && n <= paginas).sort((a, b) => a - b).forEach(n => {
+        if (n - anterior > 1) html += '<span class="pag-sep">…</span>';
+        html += `<button class="${n === pagina ? 'ativo' : ''}" onclick="irParaPagina(${n})" ${n === pagina ? 'aria-current="page"' : ''}>${n}</button>`;
+        anterior = n;
     });
+    html += `<button onclick="irParaPagina(${pagina + 1})" ${pagina === paginas ? 'disabled' : ''} aria-label="Próxima página"><i class="fas fa-chevron-right"></i></button>`;
+    nav.innerHTML = html;
 }
 
-function buscarProduto() { renderGrid(produtosCache); }
-
-function filtrarCategoria(cat, evt) {
-    categoriaAtual = cat;
-    document.querySelectorAll('.category-bar .cat-link').forEach(b => b.classList.remove('active'));
-    if (evt && evt.currentTarget) evt.currentTarget.classList.add('active');
-    Toast.fire({ icon: 'info', title: `Filtrando por: ${cat.toUpperCase()}` });
-    renderGrid(produtosCache);
+function sincronizarBarraCategorias() {
+    document.querySelectorAll('.category-bar .cat-link[data-cat]').forEach(b =>
+        b.classList.toggle('active', b.dataset.cat === estadoLoja.categoria));
 }
 
-function mostrarTodasCategorias(evt) {
-    categoriaAtual = 'todas';
-    document.querySelectorAll('.category-bar .cat-link').forEach(b => b.classList.remove('active'));
-    if (evt && evt.currentTarget) evt.currentTarget.classList.add('active');
-    renderGrid(produtosCache);
+function irParaLoja() {
+    const loja = document.getElementById('sec-loja');
+    if (loja.classList.contains('hidden')) router('loja'); else { carregarLoja(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
 }
 
-function ordenarProdutos(valor) {
-    ordenacaoAtual = valor;
-    renderGrid(produtosCache);
+function mudarFiltro(mudancas) {
+    Object.assign(estadoLoja, mudancas, { pagina: 1 });
+    irParaLoja();
+}
+
+function buscarProduto() { mudarFiltro({ q: document.getElementById('campo-busca').value.trim() }); }
+function filtrarCategoria(cat) { mudarFiltro({ categoria: cat }); fecharFiltrosMobile(); }
+function mostrarTodasCategorias() { limparFiltros(); }
+function mudarOrdem(valor) { mudarFiltro({ ordem: valor }); }
+function mudarPorPagina(valor) { mudarFiltro({ porPagina: Number(valor) }); }
+function irParaPagina(n) { estadoLoja.pagina = n; irParaLoja(); }
+
+function aplicarPreco(evt) {
+    evt.preventDefault();
+    const min = document.getElementById('preco-min').value.trim();
+    const max = document.getElementById('preco-max').value.trim();
+    if ((min !== '' && Number(min) < 0) || (max !== '' && Number(max) < 0)) {
+        return Toast.fire({ icon: 'warning', title: 'O preço não pode ser negativo.' });
+    }
+    if (min !== '' && max !== '' && Number(min) > Number(max)) {
+        return Toast.fire({ icon: 'warning', title: 'O preço mínimo é maior que o máximo.' });
+    }
+    mudarFiltro({ precoMin: min, precoMax: max });
+    fecharFiltrosMobile();
+}
+
+function removerFiltro(tipo) {
+    if (tipo === 'q') mudarFiltro({ q: '' });
+    else if (tipo === 'categoria') mudarFiltro({ categoria: '' });
+    else mudarFiltro({ precoMin: '', precoMax: '' });
+}
+
+function limparFiltros() {
+    estadoLoja = { ...estadoLoja, q: '', categoria: '', precoMin: '', precoMax: '', ordem: ORDEM_PADRAO, pagina: 1 };
+    irParaLoja();
+    fecharFiltrosMobile();
+}
+
+function toggleFiltros() {
+    const painel = document.getElementById('filtros-painel');
+    const aberto = painel.classList.toggle('aberto');
+    document.getElementById('btn-filtros-mobile').setAttribute('aria-expanded', aberto);
+}
+function fecharFiltrosMobile() {
+    document.getElementById('filtros-painel').classList.remove('aberto');
+    document.getElementById('btn-filtros-mobile').setAttribute('aria-expanded', 'false');
 }
 
 function verDetalhes(id) {
-    const p = produtosCache.find(i => i.id === id);
+    const p = produtosPorId[id];
     if (!p) return;
 
     document.getElementById('det-img-container').innerHTML = getImagemProduto(p.categoria, 160);
     document.getElementById('det-titulo').innerText = p.titulo;
     document.getElementById('det-valor').innerText = formatMoney(p.valor);
-    document.getElementById('bread-cat').innerText = p.categoria;
+    const bc = document.getElementById('bread-cat');
+    bc.innerText = CATEGORIA_NOME[p.categoria] || 'Geral';
+    bc.onclick = () => filtrarCategoria(p.categoria);
     document.getElementById('bread-nome').innerText = p.titulo;
-    document.getElementById('det-desc').innerText = `Vendedor #${p.vendedor_id}\n\nO pagamento fica retido em escrow até você confirmar o recebimento com o código enviado após a compra.`;
+    document.getElementById('det-desc').innerText = `Vendido por ${p.vendedor_nome}\n\nO pagamento fica retido em escrow até você confirmar o recebimento com o código enviado após a compra.`;
     
     const btn = document.getElementById('btn-add-cart-detail');
     const newBtn = btn.cloneNode(true);
@@ -301,39 +433,58 @@ function updateCartBadge() {
     document.getElementById('cart-badge').innerText = count;
 }
 
-function renderCarrinho() {
+async function renderCarrinho() {
     const container = document.getElementById('lista-carrinho');
     const cartIds = JSON.parse(localStorage.getItem('ryzer_cart')) || [];
-    container.innerHTML = "";
-    let total = 0;
-
-    if (cartIds.length === 0) {
-        container.innerHTML = "<p style='text-align:center; padding:40px; color:var(--text-muted)'>O teu carrinho está vazio.</p>";
+    const zerar = () => {
         document.getElementById('cart-total').innerText = "R$ 0,00";
         document.getElementById('cart-subtotal').innerText = "R$ 0,00";
+    };
+
+    if (cartIds.length === 0) {
+        container.innerHTML = "<p style='text-align:center; padding:40px; color:var(--text-muted)'>O seu carrinho está vazio.</p>";
+        zerar();
         return;
     }
 
-    if (produtosCache.length === 0) { carregarLoja().then(renderCarrinho); return; }
+    // Busca os dados atuais no servidor: o item pode ter sido vendido por
+    // outra pessoa ou ter mudado desde que foi adicionado ao carrinho.
+    let disponiveis;
+    try {
+        const res = await fetch(`${API_BASE}/projetos/por-ids?ids=${cartIds.join(',')}`);
+        if (!res.ok) throw new Error();
+        disponiveis = await res.json();
+    } catch (e) {
+        container.innerHTML = "<p style='text-align:center; padding:40px; color:var(--text-muted)'>Não foi possível carregar o carrinho. Tente novamente.</p>";
+        zerar();
+        return;
+    }
+    const porId = Object.fromEntries(disponiveis.map(p => [p.id, p]));
+    const idsValidos = cartIds.filter(id => porId[id]);
+    if (idsValidos.length !== cartIds.length) {
+        localStorage.setItem('ryzer_cart', JSON.stringify(idsValidos));
+        updateCartBadge();
+        Toast.fire({ icon: 'info', title: 'Alguns itens não estão mais disponíveis e saíram do carrinho.' });
+    }
+    if (idsValidos.length === 0) return renderCarrinho();
 
-    cartIds.forEach((id, idx) => {
-        const p = produtosCache.find(i => i.id === id);
-        if (p) {
-            total += p.valor;
-            container.innerHTML += `
-                <div class="cart-item fade-in">
-                    <div class="cart-item-icon">${getImagemProduto(p.categoria)}</div>
-                    <div style="flex:1">
-                        <strong>${esc(p.titulo)}</strong><br>
-                        <small style="color:var(--text-muted)">Vendedor #${p.vendedor_id}</small>
-                    </div>
-                    <div class="text-right">
-                        <div style="color:var(--primary); font-weight:bold;">${formatMoney(p.valor)}</div>
-                        <button onclick="removeCart(${idx})" style="color:#ff3b30; font-size:12px; margin-top:5px; text-decoration:underline; background:none; border:none; cursor:pointer;">Remover</button>
-                    </div>
-                </div>`;
-        }
-    });
+    let total = 0;
+    container.innerHTML = idsValidos.map((id, idx) => {
+        const p = porId[id];
+        total += p.valor;
+        return `
+            <div class="cart-item fade-in">
+                <div class="cart-item-icon">${getImagemProduto(p.categoria)}</div>
+                <div style="flex:1">
+                    <strong>${esc(p.titulo)}</strong><br>
+                    <small style="color:var(--text-muted)">Vendido por ${esc(p.vendedor_nome)}</small>
+                </div>
+                <div class="text-right">
+                    <div style="color:var(--primary); font-weight:bold;">${formatMoney(p.valor)}</div>
+                    <button onclick="removeCart(${idx})" style="color:#ff3b30; font-size:12px; margin-top:5px; text-decoration:underline; background:none; border:none; cursor:pointer;">Remover</button>
+                </div>
+            </div>`;
+    }).join('');
 
     document.getElementById('cart-subtotal').innerText = formatMoney(total);
     document.getElementById('cart-total').innerText = formatMoney(total);
